@@ -24,7 +24,7 @@ class DesktopUpdater {
       autoUpdater.autoDownload = false
       autoUpdater.autoInstallOnAppQuit = false
       autoUpdater.logger = null
-      autoUpdater.setFeedURL({ provider: 'github', owner: 'ct-jyjntc', repo: 'opentype' })
+      autoUpdater.setFeedURL({ provider: 'github', owner: 'ct-jyjntc', repo: 'opentype-public' })
       autoUpdater.on('error', () => { if (!this.busy) this.publish({ phase:'error', message:'更新安装未能完成，请前往发布页下载安装。' }) })
       autoUpdater.on('download-progress', progress => {
         if (!this.cancelled && this.state.phase === 'downloading') this.publish({ percent: Math.min(100,Math.max(0,progress.percent)), transferred:progress.transferred, total:progress.total })

@@ -41,7 +41,7 @@ import { serviceEndpoint, serviceToken, networkSettingsPatch } from '../shared/n
 import { registerRendererBridge } from './services/renderer-bridge'
 import { startCallbackServer, type CallbackServer } from './services/callback-server'
 import type { SpeechProvider } from './services/providers/types'
-import { createProvider, FallbackProvider } from './services/providers'
+import { createProvider } from './services/providers'
 import { resolveAsrLanguage } from './services/languages'
 import { SecureConfigStore } from './services/secure-store'
 import { applyPendingRefinement, REFINEMENT_SETUP_FILE } from './services/refinement-setup'
@@ -78,8 +78,7 @@ interface AppConfig {
   /**
    * 转写后端地址。
    *
-   * 兼容自建网关；默认由内置 SenseVoice 独立进程完成转写。
-   * 音频不出本机，这是隐私优先的设计。
+   * 兼容自建网关；SiliconFlow 使用固定的官方地址，不读取此配置。
    */
   apiBaseUrl: string
 
@@ -97,8 +96,9 @@ interface AppConfig {
    * - custom：自建服务端协议，一次调用完成转写+润色
    * - openai：OpenAI 兼容协议，两次调用（转写 + 润色）
    * - local：本机 SenseVoice Small，文字整理独立配置
+   * - siliconflow：硅基流动 SenseVoice Small，文字整理独立配置
    */
-  provider: 'custom' | 'openai' | 'local'
+  provider: 'custom' | 'openai' | 'local' | 'siliconflow'
   /** OpenAI/本地 provider 的模型名 */
   sttModel: string
   /** 独立的官方文字润色服务；不复用 ASR 密钥 */
@@ -109,6 +109,8 @@ interface AppConfig {
   enableRefine: boolean
   /** OpenAI 兼容服务的 API Key（本地服务通常不需要） */
   apiKey: string
+  /** SiliconFlow 专用密钥，不与兼容网关或文字整理复用。 */
+  siliconflowApiKey: string
   /** 是否已完成首次引导。未完成时启动显示主窗口。 */
   hasOnboarded: boolean
 }
@@ -138,18 +140,19 @@ const DEFAULT_CONFIG = {
     autoInject: true,
     micDeviceId: 'default',
     blacklistDomains: [],
-  // 兼容本地网关的地址；默认识别由内置 SenseVoice Small 独立进程完成。
+  // 仅用于兼容网关；云端与本机 SenseVoice 均不读取此地址。
   apiBaseUrl: 'http://127.0.0.1:8090',
   // 账号与云端同步走 OpenType 服务端
   cloudBaseUrl: '',
   historyRetentionDays: 90,
-  provider: 'local',
+  provider: 'siliconflow',
   sttModel: 'sensevoice-small-int8',
   refineModel: 'deepseek-flash',
   refineBaseUrl: 'https://api.deepseek.com',
   refineApiKey: '',
   enableRefine: true,
   apiKey: '',
+  siliconflowApiKey: '',
   hasOnboarded: false
 }
 
@@ -157,7 +160,11 @@ async function initStore(): Promise<void> {
   const { default: Store } = await import('electron-store')
   const backend = new Store({
     name: 'opentype-config',
-    defaults: DEFAULT_CONFIG
+    // Old profiles without an explicit provider must keep their former local
+    // behavior. Only a genuinely new profile defaults to uploading audio.
+    defaults: existsSync(join(app.getPath('userData'), 'opentype-config.json'))
+      ? { ...DEFAULT_CONFIG, provider: 'local' }
+      : DEFAULT_CONFIG
   })
   store = new SecureConfigStore(backend, safeStorage, (issue) => {
     console.warn('[opentype] credential storage:', issue)
@@ -187,7 +194,8 @@ const getPublicConfig = () => {
     micDeviceId:c.micDeviceId, blacklistDomains:c.blacklistDomains, apiBaseUrl:c.apiBaseUrl,
     cloudBaseUrl:c.cloudBaseUrl, historyRetentionDays:c.historyRetentionDays, provider:c.provider,
     sttModel:c.sttModel, refineModel:c.refineModel, refineBaseUrl:c.refineBaseUrl,
-    enableRefine:c.enableRefine, hasOnboarded:c.hasOnboarded, hasRefineApiKey:!!c.refineApiKey, hasApiKey:!!c.apiKey }
+    enableRefine:c.enableRefine, hasOnboarded:c.hasOnboarded, hasRefineApiKey:!!c.refineApiKey,
+    hasApiKey:!!c.apiKey, hasSiliconflowApiKey:!!c.siliconflowApiKey }
 }
 
 /**
@@ -657,8 +665,7 @@ function createAuthService(): AuthService {
 /**
  * 语音识别 provider。
  *
- * 按配置选择协议。custom/openai 都会自动挂一个本地回退——
- * 云端不可用时至少还能靠本机模型转写，不至于整个功能瘫掉。
+ * 严格使用用户选择的协议；云端模式不准备本地模型，也不隐式切换服务。
  */
 let nativeAsr: LocalAsrProcess | undefined
 let localModels: SenseVoiceModelStore | undefined
@@ -666,6 +673,13 @@ function getLocalModels() {
   return localModels ??= new SenseVoiceModelStore(!app.isPackaged
     ? join(app.getAppPath(), 'gateway/models/sensevoice-int8')
     : join(app.getPath('userData'), 'models/sensevoice-int8'))
+}
+function prepareLocalModels() {
+  // Selecting local may reuse the bundled model offline. Download is still an
+  // explicit settings action, and cloud-only startup never touches model files.
+  return app.isPackaged
+    ? getLocalModels().importBundle(join(process.resourcesPath, 'models/sensevoice-int8'))
+    : getLocalModels().check()
 }
 let skillActions: ReturnType<typeof registerSkillActions> | undefined
 let speechSettingsWindow: BrowserWindow | null = null
@@ -684,18 +698,23 @@ function buildProvider(): SpeechProvider {
   const authService = auth
   const refinement = { provider: 'deepseek' as const, baseUrl: c.refineBaseUrl,
     apiKey: c.refineApiKey, model: c.refineModel, enabled: c.enableRefine }
-  const primary = createProvider({
-    kind: c.provider,
-    baseUrl: c.apiBaseUrl,
-    apiKey: c.apiKey,
-    model: c.sttModel,
-    refine: c.enableRefine,
-    refineModel: c.refineModel,
-    refinement,
-    appVersion: app.getVersion(),
-    getToken: () => serviceToken(c.apiBaseUrl, c.cloudBaseUrl, () => authService.getAccessToken()),
-    getDeviceId: () => UtilHelper.getDeviceId()
-  })
+  if (c.provider !== 'local') {
+    nativeAsr?.dispose()
+    localModels?.dispose()
+    return createProvider({
+      kind: c.provider,
+      baseUrl: c.apiBaseUrl,
+      apiKey: c.apiKey,
+      siliconflowApiKey: c.siliconflowApiKey,
+      model: c.sttModel,
+      refine: c.enableRefine,
+      refineModel: c.refineModel,
+      refinement,
+      appVersion: app.getVersion(),
+      getToken: () => serviceToken(c.apiBaseUrl, c.cloudBaseUrl, () => authService.getAccessToken()),
+      getDeviceId: () => UtilHelper.getDeviceId()
+    })
+  }
 
   const models = getLocalModels()
   nativeAsr ??= new LocalAsrProcess(() => {
@@ -703,8 +722,7 @@ function buildProvider(): SpeechProvider {
     child.stdout?.on('data', () => {}); child.stderr?.on('data', () => {})
     return child
   }, models.directory)
-  const local = new NativeLocalProvider(withModelReadiness(nativeAsr, models), refinement)
-  return c.provider === 'local' ? local : new FallbackProvider(primary, local)
+  return new NativeLocalProvider(withModelReadiness(nativeAsr, models), refinement)
 }
 
 /**
@@ -1182,24 +1200,33 @@ async function savePngWithDialog(
  * 这里把 88 个通道绑到已有服务，业务逻辑不重复实现。
  */
 function registerFrontendCompat(): void {
+  // Legacy generic storage is restricted to UI namespaces. In particular it
+  // must never bypass config:get's credential redaction via get-all or a path.
+  const uiStores = new Set(['app-settings', 'app-storage'])
+  const validUiKey = (key: unknown): key is string => typeof key === 'string'
+    && !['__proto__', 'prototype', 'constructor', 'apiKey', 'siliconflowApiKey', 'refineApiKey'].includes(key)
+  const readUiStore = (name: string): Record<string, unknown> => {
+    if (!uiStores.has(name)) return {}
+    const value = store?.get(name as never)
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).filter(([key]) => validUiKey(key))) : {}
+  }
   const { channels } = registerRendererBridge({
     store: {
       // 通用键值存储：前端用它持久化 UI 状态（快捷键、语言、引导标记等）
       get: (storeName, key) => {
-        if (storeName === 'refineApiKey') return undefined
-        const all = (store?.get(storeName as never) ?? {}) as Record<string, unknown>
-        return all[key]
+        return validUiKey(key) ? readUiStore(storeName)[key] : undefined
       },
       set: (storeName, key, value) => {
-        if (storeName === 'refineApiKey') return
-        const all = (store?.get(storeName as never) ?? {}) as Record<string, unknown>
+        if (!uiStores.has(storeName) || !validUiKey(key)) return
+        const all = readUiStore(storeName)
         all[key] = value
         store?.set({ [storeName]: all } as never)
       },
-      getAll: (storeName) => storeName === 'refineApiKey' ? {} : (store?.get(storeName as never) ?? {}) as Record<string, unknown>,
+      getAll: readUiStore,
       delete: (storeName, key) => {
-        if (storeName === 'refineApiKey') return
-        const all = (store?.get(storeName as never) ?? {}) as Record<string, unknown>
+        if (!uiStores.has(storeName) || !validUiKey(key)) return
+        const all = readUiStore(storeName)
         delete all[key]
         store?.set({ [storeName]: all } as never)
       }
@@ -1795,8 +1822,16 @@ function registerIpc(): void {
   ipcMain.handle('local-asr:cancel', event => { modelCaller(event); getLocalModels().dispose() })
   ipcMain.handle('config:get', () => getPublicConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<AppConfig>) => {
-    const allowed = new Set(['mode','shortcuts','outputLanguage','autoInject','micDeviceId','blacklistDomains','apiBaseUrl','cloudBaseUrl','historyRetentionDays','provider','sttModel','refineModel','refineBaseUrl','refineApiKey','enableRefine','apiKey'])
-    if (!patch || Object.keys(patch).some(key=>!allowed.has(key))) throw new Error('invalid_config')
+    const allowed = new Set(['mode','shortcuts','outputLanguage','autoInject','micDeviceId','blacklistDomains','apiBaseUrl','cloudBaseUrl','historyRetentionDays','provider','sttModel','refineModel','refineBaseUrl','refineApiKey','enableRefine','apiKey','siliconflowApiKey'])
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key=>!allowed.has(key))) throw new Error('invalid_config')
+    if ('provider' in patch && !['local', 'siliconflow', 'openai', 'custom'].includes(patch.provider!)) throw new Error('invalid_config')
+    if ('siliconflowApiKey' in patch) {
+      if (typeof patch.siliconflowApiKey !== 'string' || patch.siliconflowApiKey.length > 1024
+        || /[^\x21-\x7e]/.test(patch.siliconflowApiKey.trim())) throw new Error('invalid_config')
+      patch = { ...patch, siliconflowApiKey: patch.siliconflowApiKey.trim() }
+    }
+    const providerKeys = ['provider', 'apiBaseUrl', 'cloudBaseUrl', 'sttModel', 'refineModel', 'enableRefine', 'apiKey', 'siliconflowApiKey', 'refineBaseUrl', 'refineApiKey']
+    if (pipeline.isBusy && providerKeys.some(key => key in patch)) throw new Error('请先结束当前听写，再修改识别服务')
     patch = networkSettingsPatch(getConfig(), patch)
     if ('historyRetentionDays' in patch && ![-1,7,30,90].includes(patch.historyRetentionDays!)) throw new Error('invalid_retention')
     if ('shortcuts' in patch && pipeline.isBusy) throw new Error('请先结束当前听写，再修改快捷键')
@@ -1825,15 +1860,13 @@ function registerIpc(): void {
       }
     }
     // provider 相关配置变了需要重建实例（协议/模型/密钥都可能变）
-    if ('provider' in patch || 'apiBaseUrl' in patch || 'cloudBaseUrl' in patch || 'sttModel' in patch
-        || 'refineModel' in patch || 'enableRefine' in patch || 'apiKey' in patch
-        || 'refineBaseUrl' in patch || 'refineApiKey' in patch) {
+    if (providerKeys.some(key => key in patch)) {
       pipeline.setProvider(buildProvider())
+      if (patch.provider === 'local') void prepareLocalModels()
     }
     if ('shortcuts' in patch) reloadKeyboardShortcuts()
     const publicConfig = getPublicConfig()
-    barWindow?.webContents.send('config:changed', publicConfig)
-    mainWindow?.webContents.send('config:changed', publicConfig)
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('config:changed', publicConfig)
     if ('historyRetentionDays' in patch) {
       await historyLifecycle.purgeOlderThan(next.historyRetentionDays)
     }
@@ -2091,10 +2124,8 @@ if (gotLock) app.whenReady().then(async () => {
   console.log(`[opentype] 就绪`)
   if (testUserData && process.env.OPENTYPE_TEST_OPEN_SPEECH_SETTINGS === '1') showSpeechSettings()
 
-  // Show onboarding/settings first; model installation stays offline and exposes progress.
-  void (app.isPackaged
-    ? getLocalModels().importBundle(join(process.resourcesPath, 'models/sensevoice-int8'))
-    : getLocalModels().check())
+  // Show onboarding/settings first. Only a selected local provider prepares its model.
+  if (getConfig().provider === 'local') void prepareLocalModels()
 
   hotkeys.setBindings(activeBindings())
 

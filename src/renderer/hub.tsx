@@ -106,8 +106,8 @@ function Hub() {
             ))}
           </nav>
           <button className="sidebar-card" onClick={() => setSettings('speech')}>
-            <strong><Icon name="lock" size={15} />本地识别</strong>
-            <span>SenseVoice 在本机完成识别，录音不离开电脑。</span>
+            <strong><Icon name="mic" size={15} />SenseVoice 听写</strong>
+            <span>云端识别无需下载，也可选择本地离线识别。</span>
             <small>听写模型设置 <Icon name="arrow" size={13} /></small>
           </button>
           <div className="sidebar-bottom">
@@ -363,7 +363,7 @@ function Home({
           </section>
           <button className="card promo-card green" onClick={() => openSettings('speech')}>
             <h3>隐私由您掌控</h3>
-            <p>语音识别在本机完成。开启 <b>DeepSeek 整理</b> 会发送待处理文字；开启云端同步会把相应文字上传到您配置的同步服务。</p>
+            <p>选择云端识别时，录音会上传到 SiliconFlow；选择本地识别时，音频在本机处理。开启 <b>文字整理</b> 会发送待处理文字；开启云端同步会把相应文字上传到您配置的同步服务。</p>
             <span className="promo-glyph"><Icon name="lock" size={84} /></span>
           </button>
           <button className="card promo-card blue" onClick={() => navigate('dictionary')}>
@@ -449,7 +449,7 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
   }, [])
   const mic = permissions.microphone === 3
   const perms: [string, string, string, boolean, string, string][] = [
-    ['mic', '麦克风', '用于录音，音频在本机识别', mic, '已授权', '待授权'],
+    ['mic', '麦克风', '用于录音，可选择云端或本地识别', mic, '已授权', '待授权'],
     ['bolt', api.platform === 'darwin' ? '输入监控' : '键盘监听环境', '用于在任何应用里响应快捷键', !!permissions.inputMonitoring, '可用', '尚不可用'],
     ['pen', api.platform === 'darwin' ? '辅助功能' : '系统输入环境', '用于把文字写进当前输入框', permissions.accessibility, '可用', '尚不可用'],
   ]
@@ -533,7 +533,7 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
               <button className="ghost" onClick={() => setStep(1)}>上一步</button>
             </div>
             <p className="muted">
-              进入设置选择本地模型；翻译和文字整理需要配置 DeepSeek。
+              进入“听写模型”配置 SiliconFlow 密钥，或选择本地模型。云端识别会上传录音；翻译和文字整理需另配 DeepSeek。
             </p>
           </>
         )}
@@ -553,10 +553,10 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
         ) : step === 1 ? (
           <div className="onb-demo">
             <div className="onb-shield"><Icon name="lock" size={34} /></div>
-            <h3>录音只在这台电脑上识别</h3>
+            <h3>由您选择识别方式</h3>
             <ul>
-              <li>SenseVoice 本地模型，断网也能用</li>
-              <li>DeepSeek 整理可选，关掉照样能听写</li>
+              <li>云端上传录音识别，本地模型可离线</li>
+              <li>文字整理可选，启用后会发送识别文字</li>
               <li>历史和词典默认只保存在本机</li>
             </ul>
           </div>

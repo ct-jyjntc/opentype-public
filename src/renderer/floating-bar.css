@@ -12,102 +12,92 @@ body {
   overflow: hidden;
   font-family: -apple-system, 'PingFang SC', sans-serif;
 }
+#root { display: flex; justify-content: center; }
+/* Capsule: compact, opaque, Typeless-like. Mode is colour only
+   (dictation white, translation blue, ask-anything green).
+   No box-shadow / backdrop-filter: on a transparent window they render
+   as a grey band under the capsule. */
 .recording-pill {
-  position: relative;
+  --wave: #f4f4f5;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
+  width: fit-content;
+  height: 40px;
   margin: 10px auto;
-  width: 240px;
-  height: 42px;
-  padding: 8px 11px;
-  color: #f5f6f1;
-  background: #24271fee;
-  border: 1px solid #ffffff19;
-  border-radius: 24px;
-  box-shadow: 0 3px 12px #0002;
+  padding: 4px;
+  color: #f4f4f5;
+  background: #0b0b0c;
+  border: 1px solid #ffffff33;
+  border-radius: 999px;
   user-select: none;
+  -webkit-app-region: drag;
 }
+.recording-pill.mode-translate { --wave: #8aa8ff; }
+.recording-pill.mode-ask { --wave: #5ad68f; }
 .recording-pill button {
   display: grid;
   place-items: center;
-  color: #d5dacb;
-  background: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   border: 0;
-  padding: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
+.recording-pill .bar-cancel { background: #3a3a3e; color: #f4f4f5; }
+.recording-pill .bar-cancel:hover { background: #4a4a4f; }
+.recording-pill .bar-stop { background: var(--wave); color: #0b0b0c; }
+.recording-pill .bar-stop:hover { filter: brightness(0.92); }
 .bar-content {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  flex: 1;
-  font-size: 11px;
+  min-width: 0;
+  padding: 0 2px;
+  cursor: move;
 }
-.waveform {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  height: 22px;
-}
+.waveform { display: flex; align-items: center; gap: 3px; height: 24px; }
 .waveform i {
   display: block;
-  background: #cbdcad;
-  width: 2px;
-  border-radius: 2px;
+  width: 3px;
+  min-height: 3px;
+  border-radius: 3px;
+  background: var(--wave);
   transition: height 90ms;
 }
-.bar-stop span {
-  display: block;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  background: #dce4d0;
-}
 .bar-label {
-  font-size: 12px;
+  display: block;
+  max-width: 180px;
+  padding: 0 4px;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  /* CJK glyphs sit low in their em box; nudge them to the optical centre. */
+  padding-bottom: 1px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #f4f4f5;
 }
-.error {
-  background: #622f29ee;
+.bar-warning { display: flex; margin-left: 6px; color: #fbbf24; }
+.bar-state {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #ffffff14;
+  color: var(--wave);
 }
-
-.bar-content { -webkit-app-region: drag; cursor: move; }
-.recording-pill button { -webkit-app-region: no-drag; }
-
-/* Visual refresh: neutral graphite capsule, blue waveform, red stop. */
-.recording-pill { background: #141416eb; border-color: #ffffff14; box-shadow: 0 8px 28px #0000004d; backdrop-filter: blur(10px); color: #f4f4f5; }
-.recording-pill button { color: #d4d4d8; border-radius: 50%; }
-.recording-pill button:hover { background: #ffffff14; }
-.waveform i { background: #6f93ff; }
-.bar-stop span { background: #ff6b6b; border-radius: 2px; }
-.bar-label { font-weight: 500; }
-.error { background: #5a1f22eb; }
-
-/* ===== Capsule v3: one capsule, colour = mode ===== */
-.recording-pill { --wave: #f4f4f5; width: fit-content; min-width: 200px; max-width: 340px; height: 44px; margin: 10px auto; padding: 6px; gap: 6px; background: linear-gradient(180deg, #232327f2, #141416f2); border: 1px solid #ffffff1a; box-shadow: 0 1px 0 #ffffff14 inset, 0 10px 30px #00000059, 0 2px 6px #00000033; -webkit-app-region: drag; }
-.recording-pill.mode-translate { --wave: #7c9cff; }
-.recording-pill.mode-ask { --wave: #4fd18b; }
-.recording-pill .bar-cancel { width: 30px; height: 30px; padding: 0; background: #ffffff12; color: #a1a1aa; flex-shrink: 0; }
-.recording-pill .bar-cancel:hover { background: #ffffff24; color: #fff; }
-.bar-content { padding: 0 8px; gap: 0; cursor: move; min-width: 0; }
-.waveform { gap: 3px; height: 26px; }
-.waveform i { background: var(--wave); width: 3px; border-radius: 3px; min-height: 4px; }
-.recording-pill .bar-stop { width: 30px; height: 30px; padding: 0; background: var(--wave); flex-shrink: 0; }
-.recording-pill .bar-stop:hover { filter: brightness(0.9); background: var(--wave); }
-.recording-pill .bar-stop span { width: 10px; height: 10px; border-radius: 2.5px; background: #141416; }
-.bar-state { width: 30px; height: 30px; display: grid; place-items: center; flex-shrink: 0; color: var(--wave); }
-.recording-pill.done .bar-state { color: #4fd18b; }
-.recording-pill.error .bar-state { color: #fca5a5; }
-.bar-warning { display: flex; margin-left: 8px; color: #fbbf24; }
-.recording-pill .bar-state.has-notice { color: #fbbf24; }
-.bar-label { font-size: 12.5px; font-weight: 600; color: var(--wave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
-.recording-pill.mode-dictate .bar-label, .recording-pill.done .bar-label { color: #f4f4f5; }
+.recording-pill.done .bar-state { background: var(--wave); color: #0b0b0c; }
+.recording-pill .bar-state.has-notice { background: #ffffff14; color: #fbbf24; }
+.recording-pill.error { background: #2a0f11; border-color: #ff6b6b4d; }
 .recording-pill.error .bar-label { color: #fecaca; }
-.recording-pill:not(.recording):not(.done):not(.error):not(.cancelled) .bar-label { background: linear-gradient(90deg, color-mix(in srgb, var(--wave) 55%, #18181b) 0%, var(--wave) 45%, color-mix(in srgb, var(--wave) 55%, #18181b) 90%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: bar-shimmer 1.6s linear infinite; }
-.recording-pill:not(.recording):not(.done):not(.error):not(.cancelled) .bar-state { animation: bar-pulse 1.2s ease-in-out infinite; }
-@keyframes bar-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-@keyframes bar-pulse { 50% { opacity: 0.45; transform: scale(0.88); } }
-@media (prefers-reduced-motion: reduce) { .bar-label, .bar-state { animation: none !important; } }
-.recording-pill.error { background: linear-gradient(180deg, #4a1d20f2, #2e1214f2); border-color: #ff6b6b33; }
+.recording-pill.error .bar-state { background: #ffffff14; color: #fca5a5; }
+.recording-pill:not(.recording):not(.done):not(.error):not(.cancelled) .bar-state svg { animation: bar-spin 1.1s linear infinite; }
+@keyframes bar-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .bar-state svg { animation: none !important; } }

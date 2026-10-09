@@ -3,7 +3,7 @@ import {
   ArrowRight, AudioLines, BookOpen, Check, CircleAlert, CircleHelp, Clock, Cloud, Copy, Download,
   History, Hourglass, House, Info, Languages, Lock, MessageCircleQuestion, Mic, PenLine, Plus,
   RefreshCw, Search, Settings, Sparkles, TextCursorInput, Trash2, User, X, Zap, Upload, Ellipsis,
-  WandSparkles, Blocks, AlignLeft, Scissors, Replace, SpellCheck, ShieldCheck, type LucideIcon,
+  WandSparkles, Blocks, AlignLeft, Scissors, Replace, SpellCheck, ShieldCheck, LoaderCircle, ArrowUpRight, type LucideIcon,
 } from 'lucide-react'
 // Icons come from Lucide (https://lucide.dev) so every glyph shares one grid and stroke.
 // Callers keep using short semantic names; unknown names fall back to the sparkle.
@@ -47,6 +47,8 @@ const icons: Record<string, LucideIcon> = {
   ask: MessageCircleQuestion,
   error: CircleAlert,
   injecting: TextCursorInput,
+  loader: LoaderCircle,
+  external: ArrowUpRight,
 }
 
 export function Icon({ name, size = 20 }: { name: string; size?: number }) {

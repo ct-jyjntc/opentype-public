@@ -18,6 +18,8 @@ const labels = {
   error: '无法完成听写',
   cancelled: '已取消',
 }
+// Symmetric envelope: short at the edges, tall in the middle.
+const wave = [5, 8, 12, 16, 19, 16, 12, 8, 5]
 function FloatingBar() {
   const [state, setState] = useState<VoiceState>({ phase: 'idle' }),
     [seconds, setSeconds] = useState(0)
@@ -82,16 +84,16 @@ function FloatingBar() {
         aria-label={state.phase === 'preparing' ? '取消开始' : state.phase === 'recording' ? '取消录音' : '取消处理'}
         onClick={() => void window.opentype.capture.cancel()}
       >
-        <Icon name="close" size={15} />
+        <Icon name="close" size={16} />
       </button>
       <div className="bar-content">
         {state.phase === 'recording' ? (
           <div className="waveform">
-            {Array.from({ length: 17 }, (_, i) => (
+            {wave.map((base, i) => (
               <i
                 key={i}
                 style={{
-                  height: `${4 + Math.min(1, (state.level ?? 0) / 0.1) * (8 + Math.sin(i * 2 + seconds) * 8)}px`,
+                  height: `${3 + Math.min(1, (state.level ?? 0) / 0.1) * base * (0.75 + 0.25 * Math.sin(Math.abs(i - 4) * 1.3 + seconds * 2))}px`,
                 }}
               />
             ))}
@@ -109,11 +111,11 @@ function FloatingBar() {
           aria-label="结束录音"
           onClick={() => void window.opentype.capture.stop()}
         >
-          <span />
+          <Icon name="check" size={17} />
         </button>
       ) : (
         <span className={`bar-state${noticeText ? ' has-notice' : ''}`}>
-          <Icon name={noticeText || state.phase === 'error' ? 'info' : state.phase === 'done' ? 'check' : 'spark'} size={16} />
+          <Icon name={noticeText || state.phase === 'error' ? 'info' : state.phase === 'done' ? 'check' : 'loader'} size={16} />
         </span>
       )}
     </div>
