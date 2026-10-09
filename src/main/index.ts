@@ -832,7 +832,10 @@ function createVoicePipeline(): CaptureSession {
       if (['preparing', 'recording', 'stopping', 'encoding', 'uploading', 'transcribing', 'refining', 'injecting'].includes(state.phase)) {
         clearTimeout(barHideTimer); barWindow?.showInactive()
       } else if (['done', 'error', 'cancelled'].includes(state.phase)) {
-        clearTimeout(barHideTimer);barHideTimer=setTimeout(()=>barWindow?.hide(),state.phase==='error'?4500:1400)
+        const hasCompletionNotice = state.phase === 'done' && Boolean(state.detail?.trim() || state.audioNotice?.trim())
+        const hideDelay = state.phase === 'error' ? 4500 : hasCompletionNotice ? 1400 : 300
+        clearTimeout(barHideTimer)
+        barHideTimer = setTimeout(() => barWindow?.hide(), hideDelay)
       }
     },
     getConfig: () => ({...getConfig(), mode:sessionMode, asrLanguage:resolveAsrLanguageFromStore(), appVersion:app.getVersion()}),
