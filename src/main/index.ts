@@ -430,6 +430,7 @@ function redirectExternalLinks(win: BrowserWindow): void {
 function createBarWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 360,
+    icon: join(app.getAppPath(), 'build/icon.png'),
     height: 104,
     show: false,
     frame: false,
@@ -463,6 +464,7 @@ function createBarWindow(): BrowserWindow {
 function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1080,
+    icon: join(app.getAppPath(), 'build/icon.png'),
     height: 720,
     minWidth: 780,
     minHeight: 580,
@@ -530,6 +532,7 @@ const CARD_MAX_HEIGHT = 0x2bc   // 700
 function createInteractiveWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 420,
+    icon: join(app.getAppPath(), 'build/icon.png'),
     height: CARD_MIN_HEIGHT,
     show: false,
     frame: false,
@@ -676,10 +679,11 @@ function createAuthService(): AuthService {
  */
 let nativeAsr: LocalAsrProcess | undefined
 let localModels: SenseVoiceModelStore | undefined
+let configGeneration = 0
 function getLocalModels() {
   return localModels ??= new SenseVoiceModelStore(!app.isPackaged
     ? join(app.getAppPath(), 'gateway/models/sensevoice-int8')
-    : join(app.getPath('userData'), 'models/sensevoice-int8'))
+    : join(app.getPath('userData'), 'models/sensevoice-int8'), undefined, `OpenType/${app.getVersion()}`)
 }
 function prepareLocalModels() {
   // Selecting local may reuse the bundled model offline. Download is still an
@@ -693,6 +697,7 @@ let speechSettingsWindow: BrowserWindow | null = null
 function showSpeechSettings() {
   if (speechSettingsWindow && !speechSettingsWindow.isDestroyed()) { speechSettingsWindow.show(); return }
   speechSettingsWindow = new BrowserWindow({ width: 780, height: 840, minWidth: 620, minHeight: 640,
+    icon: join(app.getAppPath(), 'build/icon.png'),
     title: 'OpenType 听写设置', backgroundColor: '#f5f7f4',
     webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } })
   speechSettingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -1434,11 +1439,7 @@ function registerFrontendCompat(): void {
       },
       getAccessToken: () => auth.getAccessToken(),
       logout: async () => { sync.invalidateSession(); await auth.logout() },
-      startAppLogin: async (provider) => {
-        const url = auth.createLoginUrl(provider)
-        void shell.openExternal(url)
-        return { success: true, url }
-      }
+      startAppLogin: async () => ({ success: false, detail: 'use_password_login' })
     },
 
     keyboard: {
@@ -1687,13 +1688,20 @@ function registerIpc(): void {
   })
 
   // MARK: 认证
-  ipcMain.handle('auth:register', async (_e, params: { email: string; password: string; displayName?: string }) => {
-    const r = await auth.register(params.email, params.password, params.displayName)
+  const accountCaller = (event: Electron.IpcMainInvokeEvent) => {
+    const owner = mainWindow?.webContents
+    if (!owner || event.sender !== owner || event.senderFrame !== owner.mainFrame) throw new Error('invalid_auth_request')
+  }
+  ipcMain.handle('auth:challenge-config', event => { accountCaller(event); return auth.challengeConfiguration() })
+  ipcMain.handle('auth:register', async (event, params: { email: string; password: string; displayName?: string; turnstileToken?: string }) => {
+    accountCaller(event)
+    const r = await auth.register(params.email, params.password, params.displayName, params.turnstileToken)
     if (r.success) void sync.pushNow()
     return r
   })
-  ipcMain.handle('auth:login-password', async (_e, params: { email: string; password: string }) => {
-    const r = await auth.loginWithPassword(params.email, params.password)
+  ipcMain.handle('auth:login-password', async (event, params: { email: string; password: string; turnstileToken?: string }) => {
+    accountCaller(event)
+    const r = await auth.loginWithPassword(params.email, params.password, params.turnstileToken)
     if (r.success) void sync.pushNow()
     return r
   })
@@ -1823,7 +1831,7 @@ function registerIpc(): void {
     modelCaller(event)
     if (pipeline.isBusy) throw new Error('请先结束当前听写，再准备模型。')
     const status = await getLocalModels().install(app.isPackaged ? join(process.resourcesPath, 'models/sensevoice-int8') : undefined)
-    if (status.state === 'ready') nativeAsr?.dispose()
+    if (status.state === 'ready' && !pipeline.isBusy) nativeAsr?.dispose()
     return status
   })
   ipcMain.handle('local-asr:cancel', event => { modelCaller(event); getLocalModels().dispose() })
@@ -1843,8 +1851,15 @@ function registerIpc(): void {
     patch = networkSettingsPatch(getConfig(), patch)
     if ('historyRetentionDays' in patch && ![-1,7,30,90].includes(patch.historyRetentionDays!)) throw new Error('invalid_retention')
     if ('shortcuts' in patch && pipeline.isBusy) throw new Error('请先结束当前听写，再修改快捷键')
+    if (patch.provider === 'local') {
+      const generation = configGeneration
+      if ((await getLocalModels().check()).state !== 'ready') throw new Error('请先下载并启用本地模型。')
+      if (generation !== configGeneration) throw new Error('speech_settings_changed')
+      if (pipeline.isBusy) throw new Error('请先结束当前听写，再启用本地模型。')
+    }
     if ((patch.provider ?? getConfig().provider) === 'local') patch = { ...patch, sttModel: 'sensevoice-small-int8' }
     store?.set(patch as AppConfig)
+    configGeneration++
     const next = getConfig()
     // provider 相关配置变了需要重建实例（协议/模型/密钥都可能变）
     if (providerKeys.some(key => key in patch)) {
@@ -1927,13 +1942,14 @@ function createTray(): void {
   // 同时提供 1x 与 2x，macOS 会按屏幕缩放自动选择；
   // 只给 1x 在 Retina 上会模糊。图标缺失时退回空图标，
   // 但那样用户就失去了唯一入口，所以启动时会额外显示主窗口兜底。
-  const iconPath = join(app.getAppPath(), 'build', 'tray.png')
+  const iconPath = join(app.getAppPath(), 'build', process.platform === 'darwin' ? 'tray.png' : 'icon.png')
   let icon = nativeImage.createFromPath(iconPath)
   if (icon.isEmpty()) {
     console.warn('[opentype] 托盘图标缺失，无法通过托盘打开界面')
     icon = nativeImage.createEmpty()
   } else {
-    icon.setTemplateImage(true)   // 跟随系统深浅色主题
+    if (process.platform === 'darwin') icon.setTemplateImage(true)
+    else icon = icon.resize({ width: 32, height: 32 })
   }
   tray = new Tray(icon)
   tray.setToolTip('OpenType')
@@ -2032,7 +2048,7 @@ if (gotLock) app.whenReady().then(async () => {
   serviceUserId = auth.userId
 
   // 开发态 Dock 图标：打包后由 .app 的 icns 提供，dev 下默认是 Electron 图标
-  if (!app.isPackaged && process.platform === 'darwin') {
+  if (process.platform === 'darwin') {
     const dockIcon = nativeImage.createFromPath(join(app.getAppPath(), 'build', 'icon.png'))
     if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon)
   }

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>麦克风不可用</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    font-size: 14px; line-height: 1.6; color: #1a1a1a;
+    background: #fff; padding: 20px 24px 32px;
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1c1c1e; color: #e8e8e8; }
+    .date { color: #8a8a8e; }
+    .item::before { background: #4a4a4e; }
+    h2 { border-color: #2c2c2e; }
+  }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  h2 {
+    font-size: 15px; font-weight: 600; margin: 22px 0 10px;
+    padding-bottom: 8px; border-bottom: 1px solid #ececec;
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .date { font-size: 12px; font-weight: 400; color: #8a8a8e; }
+  ul { list-style: none; }
+  .item { position: relative; padding-left: 16px; margin-bottom: 7px; }
+  .item::before {
+    content: ''; position: absolute; left: 2px; top: 9px;
+    width: 4px; height: 4px; border-radius: 50%; background: #b0b0b4;
+  }
+  .platform { font-size: 12px; color: #8a8a8e; margin-top: 2px; }
+
+  ol { list-style: none; counter-reset: step; }
+  .step { position: relative; padding-left: 32px; margin-bottom: 14px; counter-increment: step; }
+  .step::before {
+    content: counter(step); position: absolute; left: 0; top: 1px;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #f0f0f2; color: #4a4a4e;
+    font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+  }
+  @media (prefers-color-scheme: dark) {
+    .step::before { background: #2c2c2e; color: #c8c8cc; }
+  }
+</style>
+</head>
+<body>
+<h1>麦克风不可用</h1>
+<ol><li class="step">打开「系统设置」→「隐私与安全性」→「麦克风」，确认 OpenType 已勾选。</li><li class="step">完全退出 OpenType（菜单栏图标 → 退出）后重新打开，权限变更需要重启生效。</li><li class="step">检查是否有其他应用正在占用麦克风（会议软件、录屏工具）。</li><li class="step">打开「系统设置」→「声音」→「输入」，确认输入设备未静音且音量不为 0。</li><li class="step">在 OpenType 设置里切换麦克风设备，蓝牙耳机需要先在系统里连接成功。</li></ol>
+</body>
+</html>

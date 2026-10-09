@@ -15,6 +15,7 @@
 import { randomBytes, createHash, randomUUID } from 'node:crypto'
 import { serviceRequest as request } from './network'
 import { serviceEndpoint } from '../../shared/network-policy'
+import { AUTH_CHALLENGE_PAGE, type AuthChallengeConfiguration } from '../../shared/auth-challenge'
 import {
   OAUTH_ENDPOINTS, LOGIN_PROVIDER_PATH, APP_AUTH_PATH,
   APP_CLIENT_TAG, TOKEN_REFRESH_LEEWAY_MS
@@ -199,12 +200,27 @@ export class AuthService {
    * 与 PKCE 流程并存：PKCE 需要浏览器授权页，而自建部署下
    * 直接密码登录更实际（无需邮件服务、无需前端页面）。
    */
-  async register(email: string, password: string, displayName?: string): Promise<{ success: boolean; detail?: string }> {
-    return this.passwordAuth('/oauth/register', { email, password, display_name: displayName })
+  async challengeConfiguration(): Promise<AuthChallengeConfiguration> {
+    try {
+      const res = await request(serviceEndpoint(this.options.apiBaseUrl, '/oauth/challenge/config'), {
+        method: 'GET', signal: AbortSignal.timeout(15_000),
+        headers: { 'user-agent': `OpenType/${this.options.appVersion}` }
+      })
+      const payload = await res.body.json() as { status?:string; data?:AuthChallengeConfiguration }
+      const data = payload.data
+      if (res.statusCode !== 200 || payload.status !== 'OK' || !data || typeof data.required !== 'boolean'
+        || data.pageUrl !== AUTH_CHALLENGE_PAGE || typeof data.siteKey !== 'string'
+        || (data.required && !/^[A-Za-z0-9_-]{1,100}$/.test(data.siteKey))) throw new Error('challenge_unavailable')
+      return data
+    } catch { throw new Error('challenge_unavailable') }
   }
 
-  async loginWithPassword(email: string, password: string): Promise<{ success: boolean; detail?: string }> {
-    return this.passwordAuth('/oauth/login', { email, password })
+  async register(email: string, password: string, displayName?: string, turnstileToken?: string): Promise<{ success: boolean; detail?: string }> {
+    return this.passwordAuth('/oauth/register', { email, password, display_name: displayName, turnstile_token: turnstileToken })
+  }
+
+  async loginWithPassword(email: string, password: string, turnstileToken?: string): Promise<{ success: boolean; detail?: string }> {
+    return this.passwordAuth('/oauth/login', { email, password, turnstile_token: turnstileToken })
   }
 
   private async passwordAuth(

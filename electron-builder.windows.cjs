@@ -9,7 +9,7 @@ module.exports = {
     { from: 'native/windows/build/ClipboardGuard.exe', to: 'lib/windows/build/ClipboardGuard.exe' },
     { from: 'gateway/models/sensevoice-int8', to: 'models/sensevoice-int8', filter: ['model.int8.onnx', 'tokens.txt'] },
   ],
-  win: { target: [{ target: 'nsis', arch: ['x64'] }], requestedExecutionLevel: 'asInvoker' },
+  win: { icon: 'build/icon.ico', target: [{ target: 'nsis', arch: ['x64'] }], requestedExecutionLevel: 'asInvoker' },
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true,
     createDesktopShortcut: true, createStartMenuShortcut: true, deleteAppDataOnUninstall: false },
 }

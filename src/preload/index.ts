@@ -3,6 +3,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import { desktop } from './desktop'
+import type { AuthChallengeConfiguration } from '../shared/auth-challenge'
 
 const CH = {
   // 录音链路
@@ -90,6 +91,7 @@ const api = {
   },
 
   auth: {
+    challengeConfiguration: (): Promise<AuthChallengeConfiguration> => ipcRenderer.invoke('auth:challenge-config'),
     isLoggedIn: () => ipcRenderer.invoke(CH.AUTH_IS_LOGGED_IN),
     getCurrent: () => ipcRenderer.invoke(CH.AUTH_GET_CURRENT),
     getAccessToken: () => ipcRenderer.invoke(CH.AUTH_GET_ACCESS_TOKEN),
@@ -98,10 +100,10 @@ const api = {
     /** 兑换授权码（深链接回调后由主进程自动调用，此方法供手动补登） */
     login: (params: { code: string; state: string }) => ipcRenderer.invoke(CH.AUTH_LOGIN, params),
     /** 注册（邮箱 + 密码）。无需浏览器授权页。 */
-    register: (params: { email: string; password: string; displayName?: string }) =>
+    register: (params: { email: string; password: string; displayName?: string; turnstileToken?: string }) =>
       ipcRenderer.invoke(CH.AUTH_REGISTER, params),
     /** 密码登录。自建部署下比 PKCE 更直接。 */
-    loginWithPassword: (params: { email: string; password: string }) =>
+    loginWithPassword: (params: { email: string; password: string; turnstileToken?: string }) =>
       ipcRenderer.invoke(CH.AUTH_LOGIN_PASSWORD, params),
     logout: () => ipcRenderer.invoke(CH.AUTH_LOGOUT),
     onLoginFailed: (cb: (detail: string) => void) => {
@@ -180,6 +182,6 @@ const api = {
   platform: process.platform
 }
 
-contextBridge.exposeInMainWorld('opentype', api)
+if (process.isMainFrame) contextBridge.exposeInMainWorld('opentype', api)
 
 export type OpenTypeApi = typeof api

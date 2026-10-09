@@ -7,6 +7,7 @@
   },
   "files": [
     "dist/**/*",
+    "build/icon.png",
     "build/tray.png",
     "build/tray@2x.png",
     "build/third-party/**/*",
@@ -38,6 +39,7 @@
     }
   ],
   "mac": {
+    "icon": "build/icon.icns",
     "category": "public.app-category.productivity",
     "target": [
       {

@@ -18,7 +18,7 @@ import { initDb, closeDb } from './db/index.ts'
 import { createHash } from 'node:crypto'
 import {
   initSigningKey, registerUser, authenticate, getUserById, getUserByEmail, issueTokens, refreshTokens,
-  revokeRefreshToken, createAuthCode, exchangeAuthCode, createEmailCode, verifyEmailCode,
+  revokeRefreshToken, createEmailCode, verifyEmailCode,
   createPasswordResetCode, resetPasswordWithCode, deleteUserAccount,
   verifyAccessToken
 } from './services/auth.ts'
@@ -33,12 +33,10 @@ import {
   listWords, addWord, updateWord, deleteWord, batchDeleteWords, previewBulkImport, bulkImport
 } from './services/dictionary.ts'
 import {
-  readJson, readMultipart, parseMultipart, sendOk, sendError, sendJson, sendHtml, sendRedirect,
-  clientIp, rateLimit, readBody, HttpError
+  readJson, readMultipart, sendOk, sendError, sendJson,
+  clientIp, rateLimit, HttpError
 } from './http.ts'
-import { renderAuthorizePage } from './services/authorize-page.ts'
-import { renderReleaseNotesPage, renderMicTroubleshootingPage } from './services/help-page.ts'
-import { renderLegalPage } from './services/legal-pages.ts'
+import { challengeConfiguration, challengeRequired, validateChallengeConfiguration, verifyChallenge, type ChallengeAction } from './services/turnstile.ts'
 import { getUsageStats, getInsights } from './services/stats.ts'
 import { dictionaryStatus, pullDictionary, pushDictionary } from './services/dictionary-sync.ts'
 
@@ -52,6 +50,7 @@ if (process.env.NODE_ENV === 'production') {
   }
   if (process.env.ALLOW_DEV_EMAIL_CODES === 'true') throw new Error('development_email_codes_forbidden_in_production')
 }
+validateChallengeConfiguration()
 process.umask(0o077)
 
 // MARK: - 初始化
@@ -74,7 +73,6 @@ interface AuthResult {
  */
 const AUTH_SKIP = new Set([
   '/oauth/refresh_access_token',
-  '/oauth/exchange_app_login_code',
   '/oauth/signin_with_email',
   '/oauth/signin_with_google',
   '/oauth/auth_user_from_google',
@@ -84,26 +82,13 @@ const AUTH_SKIP = new Set([
   '/oauth/logout',
   '/oauth/request_password_reset',
   '/oauth/reset_password',
-  '/login/app/auth',
   '/app/get_blacklist_domain',
-  '/privacy',
-  '/terms',
-  '/contact',
-  '/health'
+  '/health',
+  '/oauth/challenge/config'
 ])
-
-/**
- * 免鉴权的前缀。
- *
- * 与 AUTH_SKIP 分开的理由：这些路径带动态段（平台名、页面名），
- * 无法枚举成精确字符串。典型场景是前端用 <iframe src="..."> 加载帮助页——
- * iframe 的请求不带 Authorization 头，若走鉴权只会渲染出 401 的 JSON。
- */
-const AUTH_SKIP_PREFIX = ['/help/']
 
 function authenticateRequest(path: string, req: import('node:http').IncomingMessage): AuthResult | null {
   if (AUTH_SKIP.has(path)) return { userId: '', email: '' }
-  if (AUTH_SKIP_PREFIX.some((p) => path.startsWith(p))) return { userId: '', email: '' }
   const header = req.headers.authorization
   if (typeof header !== 'string' || !header.startsWith('Bearer ')) return null
   const claims = verifyAccessToken(header.slice(7))
@@ -141,50 +126,7 @@ async function deliverCode(email: string, code: string, purpose: 'login' | 'pass
 }
 
 const routes: Record<string, Handler> = {
-  // ===== 帮助页面 =====
-  //
-  // 前端用 <iframe src="${baseUrl}/help/release-notes/macos?..."> 加载，
-  // 路径里带动态平台段，所以这里按前缀注册（见 dispatch）。
-  // 页面本身自包含，不依赖任何外部资源。
-  'GET /help/release-notes/:platform': async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
-    const platform = url.pathname.split('/').filter(Boolean)[2] ?? 'macos'
-    sendHtml(res, 200, renderReleaseNotesPage({
-      platform,
-      lang: url.searchParams.get('lang') ?? 'en',
-      noHeader: url.searchParams.get('noHeader') === '1',
-      noFooter: url.searchParams.get('noFooter') === '1',
-      noTitle: url.searchParams.get('noTitle') === '1'
-    }))
-  },
-
-  'GET /help/troubleshooting/microphone-unavailable': async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
-    sendHtml(res, 200, renderMicTroubleshootingPage({
-      platform: process.platform,
-      lang: url.searchParams.get('lang') ?? 'en',
-      noHeader: url.searchParams.get('noHeader') === '1',
-      noFooter: url.searchParams.get('noFooter') === '1',
-      noTitle: url.searchParams.get('noTitle') === '1'
-    }))
-  },
-
-  // ===== 法律与联系页面 =====
-  //
-  // 渲染层「关于」与登录授权页的 隐私政策/服务条款/联系我们 链接指向这里。
-  // 免鉴权：浏览器直接打开，不带 token。
-  'GET /privacy': async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
-    sendHtml(res, 200, renderLegalPage('privacy', url.searchParams.get('lang') ?? '')!)
-  },
-  'GET /terms': async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
-    sendHtml(res, 200, renderLegalPage('terms', url.searchParams.get('lang') ?? '')!)
-  },
-  'GET /contact': async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
-    sendHtml(res, 200, renderLegalPage('contact', url.searchParams.get('lang') ?? '')!)
-  },
+  'GET /oauth/challenge/config': (_req, res) => sendOk(res, challengeConfiguration()),
 
   // ===== 健康检查 =====
   'GET /health': async (_req, res) => {
@@ -334,34 +276,6 @@ const routes: Record<string, Handler> = {
     sendOk(res, { success: true })
   },
 
-  /** 兑换授权码（PKCE）。校验 code_verifier 与 state。 */
-  'POST /oauth/exchange_app_login_code': async (req, res) => {
-    const body = await readJson<{ code: string; code_verifier: string; state: string }>(req)
-    const result = exchangeAuthCode(body.code ?? '', body.code_verifier ?? '', body.state ?? '')
-    if ('error' in result) return sendError(res, 401, result.error, 401)
-    sendOk(res, result)
-  },
-
-  /**
-   * 授权码签发（浏览器授权页调用）。
-   *
-   * 完整流程：客户端打开 /login/app/auth?code_challenge&state&next
-   * → 用户在网页登录 → 网页调此端点拿到 code
-   * → 重定向到 voxtype://auth/callback?code&state
-   * → 客户端用 code + code_verifier 兑换 token
-   *
-   * 此处用 access_token 认证，确保只有已登录用户能签发授权码。
-   */
-  'POST /oauth/authorize': async (req, res, auth) => {
-    if (!auth.userId) return sendError(res, 401, 'unauthorized', 401)
-    const body = await readJson<{ code_challenge: string; state: string; redirect_uri?: string }>(req)
-    if (!body.code_challenge || !body.state) {
-      return sendError(res, 400, 'code_challenge_and_state_required', 400)
-    }
-    const code = createAuthCode(auth.userId, body.code_challenge, body.state, body.redirect_uri)
-    sendOk(res, { code, state: body.state })
-  },
-
   'POST /oauth/auth_user_from_google': async (req, res) => {
     const body = await readJson<{ email: string }>(req)
     const email = validatedEmail(body.email)
@@ -369,86 +283,6 @@ const routes: Record<string, Handler> = {
     const code = createEmailCode(email)
     const devCode = await deliverCode(email, code, 'login')
     sendOk(res, { requires_verification: true, email, ...(devCode ? { dev_code: devCode } : {}) })
-  },
-
-  // ===== 授权页 =====
-  //
-  // 客户端点击登录按钮会打开此页。用户登录后服务端签发授权码，
-  // 重定向回客户端深链接 opentype://auth/callback?code=...&state=...
-  'GET /login/app/auth': async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
-    const codeChallenge = url.searchParams.get('code_challenge') ?? ''
-    const state = url.searchParams.get('state') ?? ''
-    const next = url.searchParams.get('next') ?? '/login'
-    const redirectUri = url.searchParams.get('redirect_uri') ?? undefined
-
-    if (!codeChallenge || !state) {
-      return sendHtml(res, 400, renderAuthorizePage({
-        codeChallenge, state, next, redirectUri,
-        error: '缺少 code_challenge 或 state 参数'
-      }))
-    }
-
-    const isRegister = url.searchParams.get('mode') === 'register'
-    sendHtml(res, 200, renderAuthorizePage({ codeChallenge, state, next, redirectUri, register: isRegister }))
-  },
-
-  /**
-   * 授权页表单提交。
-   *
-   * 流程：校验账号 → 签发授权码 → 重定向到客户端深链接。
-   * 用表单 POST 而非 fetch，因为这是浏览器页面，需要跳转语义。
-   */
-  'POST /login/app/auth': async (req, res) => {
-    const body = await readBody(req, 16 * 1024)
-    const form = new URLSearchParams(body.toString('utf8'))
-    const email = (form.get('email') ?? '').trim().toLowerCase()
-    const password = form.get('password') ?? ''
-    const codeChallenge = form.get('code_challenge') ?? ''
-    const state = form.get('state') ?? ''
-    const next = form.get('next') ?? '/login'
-    const redirectUri = form.get('redirect_uri') ?? ''
-    const mode = form.get('mode') ?? 'login'
-
-    const fail = (error: string) => sendHtml(res, 200, renderAuthorizePage({
-      codeChallenge, state, next, redirectUri: redirectUri || undefined,
-      register: mode === 'register', error
-    }))
-
-    if (!/^[A-Za-z0-9_-]{43}$/.test(codeChallenge) || !state || state.length > 128) return fail('授权参数无效，请从应用重新发起登录')
-    if (redirectUri) {
-      let callback: URL
-      try { callback = new URL(redirectUri) } catch { return fail('回调地址无效，请从应用重新发起登录') }
-      if (callback.protocol !== 'http:' || callback.hostname !== '127.0.0.1' || !callback.port
-        || callback.pathname !== '/auth/callback' || callback.username || callback.password || callback.search || callback.hash) {
-        return fail('回调地址无效，请从应用重新发起登录')
-      }
-    }
-
-    // 注册或登录
-    let userId: string | null = null
-    if (mode === 'register') {
-      const r = registerUser(email, password)
-      if ('error' in r) {
-        return fail(r.error === 'email_exists' ? '该邮箱已注册，请直接登录'
-          : r.error === 'password_too_short' ? '密码至少 8 位'
-          : r.error === 'invalid_email' ? '邮箱格式不正确' : r.error)
-      }
-      userId = r.user_id
-    } else {
-      const u = authenticate(email, password)
-      if (!u) return fail('邮箱或密码不正确')
-      userId = u.user_id
-    }
-
-    // 签发授权码并跳回客户端。
-    // 优先用 redirect_uri（本地 HTTP 回调，开发态可靠）；
-    // 未提供时退回深链接（打包后可用）。
-    const code = createAuthCode(userId, codeChallenge, state)
-    const target = redirectUri
-      ? `${redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`
-      : `opentype://auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`
-    sendRedirect(res, target)
   },
 
   // ===== 用户 =====
@@ -831,6 +665,17 @@ function findHandler(method: string, pathname: string): Handler | undefined {
   return undefined
 }
 
+const CHALLENGE_ACTIONS: Record<string, ChallengeAction> = {
+  '/oauth/register': 'register',
+  '/oauth/login': 'login',
+  '/oauth/signin_with_email': 'login',
+  '/oauth/signin_with_google': 'login',
+  '/oauth/auth_user_from_google': 'login',
+  '/oauth/verify_secret_code': 'login',
+  '/oauth/request_password_reset': 'login',
+  '/oauth/reset_password': 'login'
+}
+
 const server = createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
   let url: URL
   try { url = new URL(req.url ?? '/', 'http://localhost') } catch { sendError(res, 400, 'invalid_url', 400); return }
@@ -842,7 +687,7 @@ const server = createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
     return
   }
 
-  if (req.method === 'POST' && (url.pathname.startsWith('/oauth/') || url.pathname === '/login/app/auth')) {
+  if (req.method === 'POST' && url.pathname.startsWith('/oauth/')) {
     const ip = clientIp(req)
     if (!rateLimit(`auth:${ip}`, 30, 60_000)
       || (url.pathname === '/oauth/register' && !rateLimit(`register:${ip}`, 10, 3600_000))) {
@@ -858,7 +703,18 @@ const server = createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
     return
   }
 
-  Promise.resolve(handler(req, res, auth)).catch((err) => {
+  Promise.resolve().then(async () => {
+    const action = req.method === 'POST' ? CHALLENGE_ACTIONS[url.pathname] : undefined
+    if (action) {
+      const body = await readJson<Record<string, unknown>>(req)
+      const legacy = /^OpenType\/0\.2\.0-beta\.(\d+)(?:\s|$)/.exec(req.headers['user-agent'] ?? '')
+      if (challengeRequired() && !body.turnstile_token && legacy && Number(legacy[1]) <= 24) {
+        throw new HttpError(426, '请升级到 OpenType 0.2.0-beta.25 或更新版本，在应用内完成安全验证后登录。')
+      }
+      await verifyChallenge(body.turnstile_token, action, clientIp(req))
+    }
+    await handler(req, res, auth)
+  }).catch((err) => {
     if (!(err instanceof HttpError)) console.error(`[error] ${key}: request_failed`)
     if (!res.headersSent) sendError(res, err instanceof HttpError ? err.status : 500,
       err instanceof HttpError ? err.message : 'internal_server_error')

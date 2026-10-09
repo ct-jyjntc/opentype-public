@@ -13,6 +13,7 @@ export class HttpError extends Error {
 
 const MAX_JSON_BODY = 8 * 1024 * 1024      // 8MB，足够 200 条记录的批量推送
 const MAX_MULTIPART_BODY = 64 * 1024 * 1024 // 64MB，约 9 分钟 Opus 的 20 倍余量
+const parsedJson = new WeakMap<IncomingMessage, unknown>()
 
 export function readBody(req: IncomingMessage, limit = MAX_JSON_BODY): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -33,20 +34,22 @@ export function readBody(req: IncomingMessage, limit = MAX_JSON_BODY): Promise<B
 }
 
 export async function readJson<T = Record<string, unknown>>(req: IncomingMessage): Promise<T> {
+  if (parsedJson.has(req)) return parsedJson.get(req) as T
   const authRequest = (req.url ?? '').startsWith('/oauth/')
   const body = await readBody(req, authRequest ? 16 * 1024 : MAX_JSON_BODY)
-  if (body.length === 0) return {} as T
+  if (body.length === 0) { const empty = {}; parsedJson.set(req, empty); return empty as T }
   let value: unknown
   try { value = JSON.parse(body.toString('utf8')) } catch { throw new HttpError(400, 'invalid_json') }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'invalid_json_object')
   if (authRequest) {
     const limits: Record<string, number> = { email:254, password:1024, new_password:1024,
-      display_name:80, code:128, code_verifier:128, state:128, code_challenge:128, refresh_token:256, redirect_uri:512 }
+      display_name:80, code:128, code_verifier:128, state:128, code_challenge:128, refresh_token:256, redirect_uri:512, turnstile_token:2048 }
     for (const [name, length] of Object.entries(limits)) {
       const field = (value as Record<string, unknown>)[name]
       if (field !== undefined && (typeof field !== 'string' || field.length > length)) throw new HttpError(400, 'invalid_auth_input')
     }
   }
+  parsedJson.set(req, value)
   return value as T
 }
 

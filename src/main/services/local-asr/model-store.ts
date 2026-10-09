@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fetchPublicHttps } from '../public-download'
 
 export const SENSEVOICE_REVISION = '2365baeacb507f821a0c8120fcee3d484dba7a07'
+export const SENSEVOICE_DOWNLOAD_BASE = `https://www.opentype.top/downloads/models/sensevoice-int8/${SENSEVOICE_REVISION}`
 export const SENSEVOICE_FILES = [
   { name: 'model.int8.onnx', bytes: 239233841, sha256: 'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51' },
   { name: 'tokens.txt', bytes: 315894, sha256: 'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc' }
@@ -18,7 +19,7 @@ export class SenseVoiceModelStore {
   private checking?: Promise<ModelStatus>
   private abort?: AbortController
   private verified = new Map<string, string>()
-  constructor(readonly directory: string, private readonly files: readonly ModelFile[] = SENSEVOICE_FILES) {
+  constructor(readonly directory: string, private readonly files: readonly ModelFile[] = SENSEVOICE_FILES, private readonly userAgent = 'OpenType') {
     this.status = { state: 'missing', downloaded: 0, total: files.reduce((sum, file) => sum + file.bytes, 0) }
   }
 
@@ -123,8 +124,8 @@ export class SenseVoiceModelStore {
     const destination = join(this.directory, file.name), part = destination + `.${randomUUID()}.part`
     let handle
     try {
-      const response = await fetchPublicHttps(`https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/${SENSEVOICE_REVISION}/${file.name}`, {
-        signal: AbortSignal.any([signal, AbortSignal.timeout(600_000)])
+      const response = await fetchPublicHttps(`${SENSEVOICE_DOWNLOAD_BASE}/${file.name}`, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(600_000)]), userAgent: this.userAgent
       })
       if (!response.ok || !response.body) throw new Error('download_failed')
       handle = await open(part, 'wx', 0o600)

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  ArrowRight, AudioLines, BookOpen, Check, CircleAlert, CircleHelp, Clock, Cloud, Copy, Download,
+  ArrowRight, BookOpen, Check, CircleAlert, CircleHelp, Clock, Cloud, Copy, Download,
   History, Hourglass, House, Info, Languages, Lock, MessageCircleQuestion, Mic, PenLine, Plus,
   RefreshCw, Search, Settings, Sparkles, TextCursorInput, Trash2, User, X, Zap, Upload, Ellipsis,
   WandSparkles, Blocks, AlignLeft, Scissors, Replace, SpellCheck, ShieldCheck, LoaderCircle, ArrowUpRight, type LucideIcon,
@@ -19,7 +19,6 @@ const icons: Record<string, LucideIcon> = {
   hourglass: Hourglass,
   pen: PenLine,
   lock: Lock,
-  logo: AudioLines,
   close: X,
   plus: Plus,
   search: Search,
@@ -52,6 +51,12 @@ const icons: Record<string, LucideIcon> = {
 }
 
 export function Icon({ name, size = 20 }: { name: string; size?: number }) {
+  if (name === 'logo') {
+    const mark = new URL('../../../build/brand-mark.png', import.meta.url).href
+    return <span aria-hidden="true" style={{ width: size, height: size, display: 'inline-block', flexShrink: 0,
+      backgroundColor: 'currentColor', mask: `url(${mark}) center / contain no-repeat`,
+      WebkitMask: `url(${mark}) center / contain no-repeat` }} />
+  }
   const Glyph = icons[name] ?? Sparkles
   return <Glyph size={size} strokeWidth={name === 'logo' ? 2.25 : 1.75} aria-hidden="true" />
 }

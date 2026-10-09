@@ -8,6 +8,7 @@ import { shortcutLabel } from '../shortcut-label'
 import { SpeechSettings } from '../speech-settings'
 import { Markdown } from '../components/markdown'
 import { SettingsBackup } from '../components/settings-backup'
+import { AccountChallenge } from '../components/account-challenge'
 import type { UpdateState } from '../../shared/updater'
 import type { OutputAudioStatus } from '../../shared/output-audio'
 const api = window.opentype
@@ -451,6 +452,8 @@ function Personal({
   )
 }
 function Account({ notify }: { notify: (s: string) => void }) {
+  const [challengeToken, setChallengeToken] = useState<string | null>(null)
+  const [challengeAttempt, setChallengeAttempt] = useState(0)
   const [logged, setLogged] = useState(false),
     [email, setEmail] = useState(''),
     [password, setPassword] = useState(''),
@@ -533,13 +536,16 @@ function Account({ notify }: { notify: (s: string) => void }) {
           onSubmit={async (e) => {
             e.preventDefault()
             if (authPending.current || busy || !accountLoaded) return
+            if (challengeToken === null) { setError(errorMessage('challenge_required')); return }
+            const token = challengeToken
+            setChallengeToken(null)
             authPending.current = true
             setBusy(true)
             setError('')
             try {
               const r = await (register
-                ? api.auth.register({ email: email.trim(), password })
-                : api.auth.loginWithPassword({ email: email.trim(), password }))
+                ? api.auth.register({ email: email.trim(), password, turnstileToken: token || undefined })
+                : api.auth.loginWithPassword({ email: email.trim(), password, turnstileToken: token || undefined }))
               if (!r.success) throw new Error(r.detail || '暂时无法登录，请重试')
               setLogged(true)
               setPassword('')
@@ -548,6 +554,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
             } finally {
               authPending.current = false
               setBusy(false)
+              setChallengeAttempt(value => value + 1)
             }
           }}
         >
@@ -574,18 +581,21 @@ function Account({ notify }: { notify: (s: string) => void }) {
               autoComplete={register ? 'new-password' : 'current-password'}
             />
           </label>
+          <AccountChallenge key={`${register ? 'register' : 'login'}-${challengeAttempt}`} action={register ? 'register' : 'login'}
+            disabled={busy} onToken={setChallengeToken} />
           <div className="dialog-actions">
             <button
               type="button"
               disabled={busy}
               onClick={() => {
+                setChallengeToken(null)
                 setRegister(!register)
                 setError('')
               }}
             >
               {register ? '已有账户，去登录' : '注册账户'}
             </button>
-            <button className="primary" disabled={busy}>
+            <button className="primary" disabled={busy || challengeToken === null}>
               {busy ? '处理中…' : register ? '注册并登录' : '登录'}
             </button>
           </div>
@@ -739,11 +749,8 @@ function About() {
         <strong>接收测试版</strong>
         <Toggle checked={update.channel === 'beta'} disabled={busy} onChange={value => void change(() => api.desktop.updater.check(value ? 'beta' : 'stable'))} label="接收测试版" />
       </div>
-      <button className="about-row about-link" onClick={() => open('https://github.com/ct-jyjntc/opentype-public/releases')}>
-        <strong>发布页</strong><Icon name="external" size={18} />
-      </button>
-      <button className="about-row about-link" onClick={() => open('https://github.com/ct-jyjntc/opentype-public')}>
-        <strong>源代码</strong><Icon name="external" size={18} />
+      <button className="about-row about-link" onClick={() => open('https://www.opentype.top/#download')}>
+        <strong>版本下载</strong><Icon name="external" size={18} />
       </button>
     </div>
   )
@@ -758,13 +765,10 @@ function Help() {
     ]],
     ['隐私与离线', [
       ['录音会上传吗？', '云端识别会把录音上传到 SiliconFlow；本地识别时录音不离开电脑。开启文字整理后，识别文字与允许的文字上下文会发送到整理服务。'],
-      ['离线可以使用吗？', '在「听写模型」选本地识别并下载模型，再关掉文字整理。'],
+      ['离线可以使用吗？', '在「听写模型」选择本地，点击「下载并启用」，准备完成后关闭文字整理并保存。'],
     ]],
     ['遇到问题', [
       ['失败后怎样找回内容？', '在历史记录里打开那一条，可以重放录音或重新识别。'],
-    ]],
-    ['开发者', [
-      ['怎样修改这个界面？', '界面代码在 src/renderer，改完 npm run build。'],
     ]],
   ]
   return (

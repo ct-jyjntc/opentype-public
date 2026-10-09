@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>OpenType · 安全验证</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; }
+    body { margin: 0; padding: 12px; color: light-dark(#252525,#eee); background: light-dark(#fff,#202020); }
+    main { display: grid; justify-items: center; gap: 10px; }
+    p { margin: 0; text-align: center; }
+    #status { font-size: 12px; color: light-dark(#555,#ccc); }
+    button { padding: 6px 14px; border: 1px solid #8886; border-radius: 8px; background: transparent; color: inherit; }
+    button:focus-visible { outline: 2px solid #5588ff; outline-offset: 2px; }
+    * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #8887 transparent; }
+  </style>
+</head>
+<body>
+<main>
+  <div id="challenge" aria-label="Cloudflare 安全验证"></div>
+  <p id="status" role="status" aria-live="polite">正在加载安全验证…</p>
+  <button id="retry" type="button" hidden>重新验证</button>
+</main>
+<script src="/auth/verify.js" defer></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileReady&amp;render=explicit" defer></script>
+</body>
+</html>
