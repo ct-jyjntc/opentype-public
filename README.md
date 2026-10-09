@@ -54,7 +54,7 @@ npm run pack:beta
 
 Windows x64 原生源码和 `electron-builder.windows.cjs` 配置保留，需要 Windows SDK、MSVC、CMake 及 x64 Node/Electron。当前仓库的历史验收记录没有 Windows 编译和运行结果，不能视为可用 Windows 发布版。
 
-检查更新、发布页与构建发布配置均使用 `ct-jyjntc/opentype-public`。[beta.25 测试版](https://github.com/ct-jyjntc/opentype-public/releases/tag/v0.2.0-beta.25) 已公开提供 DMG、ZIP、测试版更新元数据、校验文件与真人复测清单。beta.26 正在修复软件内检查更新；自动下载并安装更新仍需另行真人复测。旧版记录中的本机产物链接、内部运行日志和提交号仅为历史说明。
+检查更新、发布页与构建发布配置均使用 `ct-jyjntc/opentype-public`。[beta.26 测试版](https://github.com/ct-jyjntc/opentype-public/releases/tag/v0.2.0-beta.26) 已公开提供 DMG、ZIP、测试版更新元数据、校验文件与真人复测清单。beta.26 已修复软件内检查更新，测试版通道的真实包内调用已读到公开发布源；此验收不是鼠标点击，自动下载并安装更新仍需另行真人复测。旧版记录中的本机产物链接、内部运行日志和提交号仅为历史说明。
 
 ## 目录
 
