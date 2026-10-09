@@ -63,7 +63,7 @@ export interface TranscribeResult {
 export interface SpeechProvider {
   readonly name: string
   transcribe(params: TranscribeParams): Promise<TranscribeResult>
-  /** Optional local precomputation; refinement and delivery happen only at finish. */
+  /** Optional recognition during recording; refinement and delivery happen only at finish. */
   startLiveTranscription?(options: { language: string; signal: AbortSignal; onStableText?: (text: string, segments: number) => void }): LiveTranscription | undefined
 }
 
@@ -76,9 +76,11 @@ export interface LiveTranscription {
 
 /** provider 配置。用于运行时选择与参数注入。 */
 export interface ProviderConfig {
-  kind: 'custom' | 'openai' | 'local'
+  kind: 'custom' | 'openai' | 'local' | 'siliconflow'
   baseUrl: string
   apiKey?: string
+  /** Only used for the fixed SiliconFlow endpoint, never copied from apiKey. */
+  siliconflowApiKey?: string
   /** OpenAI 的模型名，如 gpt-4o-transcribe */
   model?: string
   /** 是否启用润色环节（OpenAI 需额外一次 chat 调用） */

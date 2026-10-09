@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KeyboardMonitorStatus, Preferences, SettingsTab } from '../../shared/desktop'
 import { errorMessage } from '../../shared/desktop'
 import { serviceEndpoint } from '../../shared/network-policy'
@@ -531,7 +531,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
           <Icon name="user" size={28} />
         </div>
         <h2>{logged ? '已登录' : '本地账户'}</h2>
-        <p>本地听写、历史和词典无需登录。登录后可分别选择同步历史和账号词典，词库同步在“词典”页开启。</p>
+        <p>听写、历史和词典无需登录 OpenType 账户；云端识别需单独配置 SiliconFlow 密钥。登录后可分别选择同步历史和账号词典，词库同步在“词典”页开启。</p>
         {serverError && <p className="muted">{serverError}</p>}
       </div>
       {!logged ? (
@@ -692,7 +692,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
             placeholder="https://your-server.example"
           />
         </label>
-        <p className="muted">更改地址后需重新登录；本地识别模型不受影响。</p>
+        <p className="muted">更改地址后需重新登录；听写模型设置不受影响。</p>
         <button
           onClick={() =>
             void api.config
@@ -715,44 +715,59 @@ function Account({ notify }: { notify: (s: string) => void }) {
 }
 function About() {
   const [version, setVersion] = useState('')
-  const [update,setUpdate] = useState<UpdateState>({phase:'idle',channel:'stable'}), [channel,setChannel] = useState<'stable'|'beta'>('stable'), [error,setError] = useState('')
-  const busy = ['checking','downloading'].includes(update.phase)
-  const change = async (action:()=>Promise<unknown>) => {
-    setError(''); try { await action() } catch(e) { setError(errorMessage(e)) }
+  const [update, setUpdate] = useState<UpdateState>({ phase: 'idle', channel: 'stable' })
+  const [error, setError] = useState(''), [loaded, setLoaded] = useState(false), [pending, setPending] = useState(false)
+  const actionPending = useRef(false)
+  const busy = !loaded || pending || ['checking', 'downloading'].includes(update.phase)
+  const change = async (action: () => Promise<UpdateState | void>) => {
+    if (actionPending.current) return
+    actionPending.current = true
+    setPending(true)
+    setError('')
+    try {
+      const state = await action()
+      if (state) setUpdate(state)
+    } catch (e) { setError(errorMessage(e)) }
+    finally { actionPending.current = false; setPending(false) }
   }
   useEffect(() => {
-    void api.desktop.snapshot().then((v) => setVersion(v.version))
     let alive = true, received = false
-    const off = api.desktop.updater.onState(s=>{received=true;setUpdate(s);setChannel(s.channel)})
-    void api.desktop.updater.get().then(s=>{if(alive&&!received){setUpdate(s);setChannel(s.channel)}}).catch(e=>{if(alive)setError(errorMessage(e))})
-    return ()=>{alive=false;off()}
+    void api.desktop.snapshot().then(v => { if (alive) setVersion(v.version) }).catch(e => { if (alive) setError(errorMessage(e)) })
+    const off = api.desktop.updater.onState(s => {
+      received = true
+      if (alive) { setUpdate(s); setLoaded(true) }
+    })
+    void api.desktop.updater.get().then(s => {
+      if (alive && !received) { setUpdate(s); setLoaded(true) }
+    }).catch(e => { if (alive) setError(errorMessage(e)) })
+    return () => { alive = false; off() }
   }, [])
   const status = update.message || ({checking:'正在检查…',current:'已是最新版本',available:`发现新版本 ${update.version ?? ''}`,downloading:`正在下载 ${Math.round(update.percent??0)}%`,ready:'更新已下载',cancelled:'下载已取消',error:'更新失败',unavailable:'此版本不支持自动更新'} as Record<string,string>)[update.phase]
-  const open = (url: string) => void api.desktop.openUrl(url)
+  const open = (url: string) => void api.desktop.openUrl(url).catch(e => setError(errorMessage(e)))
   return (
     <div className="about-list">
       <div className="about-row">
         <div>
           <strong>版本</strong>
-          <span>{version ? `v${version.replace(/^v/, '')}` : ''}{status ? ` · ${status}` : ''}</span>
+          <span aria-live="polite">{version ? `v${version.replace(/^v/, '')}` : ''}{status ? ` · ${status}` : ''}</span>
         </div>
-        {update.phase==='available' ? <button className="primary" disabled={channel!==update.channel} onClick={()=>void change(()=>api.desktop.updater.download())}>下载更新</button>
-          : update.phase==='downloading' ? <button onClick={()=>void change(()=>api.desktop.updater.cancel())}>取消下载</button>
-          : update.phase==='ready' ? <button className="primary" disabled={channel!==update.channel} onClick={()=>void change(()=>api.desktop.updater.install())}>重启并安装</button>
-          : <button disabled={busy} onClick={()=>void change(()=>api.desktop.updater.check(channel))}>{update.phase==='checking'?'正在检查…':'检查更新'}</button>}
+        {update.phase === 'available' ? <button className="primary" disabled={busy} onClick={() => void change(() => api.desktop.updater.download())}>下载更新</button>
+          : update.phase === 'downloading' ? <button onClick={() => void api.desktop.updater.cancel().then(setUpdate).catch(e => setError(errorMessage(e)))}>取消下载</button>
+          : update.phase === 'ready' ? <button className="primary" disabled={busy} onClick={() => void change(() => api.desktop.updater.install())}>重启并安装</button>
+          : <button disabled={busy} onClick={() => void change(() => api.desktop.updater.check(update.channel))}>{update.phase === 'checking' ? '正在检查…' : '检查更新'}</button>}
       </div>
-      {update.phase==='downloading'&&<progress value={update.percent??0} max={100} aria-label="更新下载进度"/>}
-      {update.phase==='ready'&&<p className="about-note">安装会关闭应用并重启，请先保存尚未保留的文字。</p>}
-      {update.releaseNotes&&<details className="about-notes"><summary>版本说明 · {update.version}</summary><Markdown text={update.releaseNotes}/></details>}
-      {error&&<p className="inline-error" role="alert">{error}</p>}
+      {update.phase === 'downloading' && <progress value={update.percent ?? 0} max={100} aria-label="更新下载进度" />}
+      {update.phase === 'ready' && <p className="about-note">安装会关闭应用并重启，请先保存尚未保留的文字。</p>}
+      {update.releaseNotes && <details className="about-notes"><summary>版本说明 · {update.version}</summary><Markdown text={update.releaseNotes} /></details>}
+      {error && <p className="inline-error" role="alert">{error}</p>}
       <div className="about-row">
         <strong>接收测试版</strong>
-        <Toggle checked={channel==='beta'} disabled={busy} onChange={(v:boolean)=>{const c=v?'beta':'stable';setChannel(c);void change(()=>api.desktop.updater.check(c))}} label="接收测试版" />
+        <Toggle checked={update.channel === 'beta'} disabled={busy} onChange={value => void change(() => api.desktop.updater.check(value ? 'beta' : 'stable'))} label="接收测试版" />
       </div>
-      <button className="about-row about-link" onClick={()=>open('https://github.com/ct-jyjntc/opentype-public/releases')}>
+      <button className="about-row about-link" onClick={() => open('https://github.com/ct-jyjntc/opentype-public/releases')}>
         <strong>发布页</strong><Icon name="external" size={18} />
       </button>
-      <button className="about-row about-link" onClick={()=>open('https://github.com/ct-jyjntc/opentype-public')}>
+      <button className="about-row about-link" onClick={() => open('https://github.com/ct-jyjntc/opentype-public')}>
         <strong>源代码</strong><Icon name="external" size={18} />
       </button>
     </div>
@@ -767,7 +782,8 @@ function Help() {
       ['翻译与随便问如何使用？', '使用设置中的翻译或随便问快捷键，需要先配置 DeepSeek。选中文字后可要求改写或解释，回答先显示在卡片里；可编辑选区可点击“替换选中文字”，只读正文可复制回答。'],
     ]],
     ['隐私与离线', [
-      ['离线可以使用吗？', '下载 SenseVoice Small 并关闭 DeepSeek 整理，即可在本机听写。录音不设最短或最长时长；说话时利用停顿提前识别，结束后补齐剩余内容并输出全文。'],
+      ['录音会上传吗？', '选择 SiliconFlow 云端识别时，录音会分段上传到 SiliconFlow。选择本地识别时，音频在本机处理；如果开启云端文字整理，识别文字和允许的文字上下文仍会发送到整理服务。'],
+      ['离线可以使用吗？', '在“听写模型”选择本地识别、准备 SenseVoice Small 模型并保存，关闭云端整理，即可离线听写。录音不设最短或最长时长；说话时利用停顿提前识别，结束后补齐剩余内容并输出全文。'],
     ]],
     ['遇到问题', [
       ['失败后怎样找回内容？', '历史记录中打开这条口述，可播放、导出录音，查看原文，或重新识别。'],

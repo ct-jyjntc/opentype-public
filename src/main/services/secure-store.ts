@@ -15,7 +15,7 @@ type Envelope = { opentypeEncrypted: 1; ciphertext: string }
 export type SecretStorageIssue = 'session_only' | 'decrypt_failed'
 
 // app-storage contains the legacy renderer's own userData/session copy.
-const PROTECTED_KEYS = new Set(['apiKey', 'refineApiKey', 'userData', 'app-storage'])
+const PROTECTED_KEYS = new Set(['apiKey', 'siliconflowApiKey', 'refineApiKey', 'userData', 'app-storage'])
 const emptyValue = (key: string): unknown => key === 'app-storage' ? {} : ''
 const isEmpty = (value: unknown) => value == null || value === ''
 const isEnvelope = (value: unknown): value is Envelope => !!value && typeof value === 'object'

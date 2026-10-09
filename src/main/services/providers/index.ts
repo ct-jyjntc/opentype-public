@@ -8,6 +8,7 @@ import { serviceRequest as request } from '../network'
 
 import { CustomProvider } from './custom'
 import { OpenAIProvider } from './openai'
+import { SiliconFlowProvider } from './siliconflow'
 import { refineTranscript } from './refinement'
 import type { SpeechProvider, ProviderConfig, TranscribeParams, TranscribeResult } from './types'
 
@@ -82,6 +83,10 @@ export class LocalProvider implements SpeechProvider {
 /** 按配置创建 provider。 */
 export function createProvider(config: ProviderConfig): SpeechProvider {
   switch (config.kind) {
+    case 'siliconflow':
+      return new SiliconFlowProvider(config.siliconflowApiKey ?? '', config.refinement ?? {
+        provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', enabled: false,
+      })
     case 'openai':
       return new OpenAIProvider(config)
     case 'custom':

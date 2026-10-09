@@ -1,9 +1,11 @@
 import { encodeWav } from '../pcm'
-import type { LocalAsrProcess } from './process'
 import { PauseSegmenter } from './pause-segmenter'
 import { joinTranscripts } from './segments'
 
 type Segment = { samples?: Float32Array; text?: string; error?: string }
+export interface SegmentRecognizer {
+  transcribe(audio: Uint8Array, signal?: AbortSignal): Promise<{ text?: string; error?: string }>
+}
 
 /** Serial speculative ASR during capture. Only finish exposes the complete transcript. */
 export class LiveLocalTranscription {
@@ -16,9 +18,11 @@ export class LiveLocalTranscription {
   private result?: Promise<{ text?: string; error?: string }>
   private readonly abort = () => this.dispose()
 
-  constructor(private readonly engine: Pick<LocalAsrProcess, 'transcribe'>,
+  constructor(private readonly engine: SegmentRecognizer,
     private readonly signal: AbortSignal,
-    private readonly onStableText?: (text: string, segments: number) => void) {
+    private readonly onStableText?: (text: string, segments: number) => void,
+    private readonly failureDetail = 'local_asr_failed',
+    private readonly shouldRetry: (error: string) => boolean = () => true) {
     signal.addEventListener('abort', this.abort, { once: true })
     if (signal.aborted) this.dispose()
   }
@@ -38,7 +42,7 @@ export class LiveLocalTranscription {
     try {
       const result = await this.engine.transcribe(encodeWav([segment.samples], 16000), this.controller.signal)
       if (this.disposed || this.signal.aborted) return
-      segment.error = result.error ?? (typeof result.text === 'string' ? undefined : 'local_asr_failed')
+      segment.error = result.error ?? (typeof result.text === 'string' ? undefined : this.failureDetail)
       if (!segment.error) {
         segment.text = result.text?.trim() ?? ''
         segment.samples = undefined
@@ -51,7 +55,7 @@ export class LiveLocalTranscription {
         this.onStableText?.(joinTranscripts(prefix).slice(-600), prefix.length)
       }
     } catch {
-      if (!this.disposed) segment.error = 'local_asr_failed'
+      if (!this.disposed) segment.error = this.failureDetail
     }
   }
 
@@ -73,7 +77,7 @@ export class LiveLocalTranscription {
     // A crashed/busy background job must not silently remove a sentence. Retry only
     // failed audio once; successful segments are never re-transcribed or duplicated.
     for (const segment of this.segments) {
-      if (segment.error) await this.recognize(segment)
+      if (segment.error && this.shouldRetry(segment.error)) await this.recognize(segment)
       if (this.disposed || this.signal.aborted) return { error: 'cancelled' }
       if (segment.error) return { error: segment.error }
     }
