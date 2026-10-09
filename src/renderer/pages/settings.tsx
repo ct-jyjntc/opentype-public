@@ -727,36 +727,34 @@ function About() {
     void api.desktop.updater.get().then(s=>{if(alive&&!received){setUpdate(s);setChannel(s.channel)}}).catch(e=>{if(alive)setError(errorMessage(e))})
     return ()=>{alive=false;off()}
   }, [])
+  const status = update.message || ({checking:'正在检查…',current:'已是最新版本',available:`发现新版本 ${update.version ?? ''}`,downloading:`正在下载 ${Math.round(update.percent??0)}%`,ready:'更新已下载',cancelled:'下载已取消',error:'更新失败',unavailable:'此版本不支持自动更新'} as Record<string,string>)[update.phase]
+  const open = (url: string) => void api.desktop.openUrl(url)
   return (
-    <div className="about-card">
-      <div className="brand-mark"><Icon name="logo" size={34} /></div>
-      <h2>OpenType</h2>
-      <p>用声音，自然表达。</p>
-      <p className="muted">版本 {version} · 可编辑源码版</p>
-      <section className="update-panel">
-        <div className="skill-toolbar"><select aria-label="更新通道" disabled={busy} value={channel} onChange={e=>setChannel(e.target.value as 'stable'|'beta')}><option value="stable">正式版</option><option value="beta">包含测试版</option></select>
-          <button disabled={busy} onClick={()=>void change(()=>api.desktop.updater.check(channel))}>{update.phase==='checking'?'正在检查…':'检查更新'}</button></div>
-        <p role="status">{update.message || ({idle:'点击检查，查看是否有新版本。',checking:'正在查询官方发行版本…',current:'当前已是所选通道的最新版本。',available:`发现新版本 ${update.version ?? ''}`,downloading:`正在下载 ${Math.round(update.percent??0)}%`,ready:'更新已下载，准备安装。',cancelled:'下载已取消。',error:'更新失败。',unavailable:'此版本暂不支持自动更新。'}[update.phase])}</p>
-        {update.phase==='downloading'&&<><progress value={update.percent??0} max={100} aria-label="更新下载进度"/><button onClick={()=>void change(()=>api.desktop.updater.cancel())}>取消下载</button></>}
-        {channel!==update.channel&&<p className="muted">点击检查更新以应用新通道。</p>}
-        {update.phase==='available'&&<button className="primary" disabled={channel!==update.channel} onClick={()=>void change(()=>api.desktop.updater.download())}>下载更新</button>}
-        {update.phase==='ready'&&<><p className="muted">请先复制或保存尚未保留的工作台文字。安装会关闭应用并重启。</p><button className="primary" disabled={channel!==update.channel} onClick={()=>void change(()=>api.desktop.updater.install())}>重启并安装</button></>}
-        {update.releaseNotes&&<details><summary>版本说明 · {update.version}</summary><Markdown text={update.releaseNotes}/></details>}
-        {error&&<p className="inline-error" role="alert">{error}</p>}
-        <button onClick={()=>void api.desktop.openUrl('https://github.com/ct-jyjntc/opentype-public/releases')}>打开官方发布页</button>
-      </section>
-      <button
-        onClick={() =>
-          void api.desktop.openUrl('https://github.com/ct-jyjntc/opentype-public')
-        }
-      >
-        项目与源代码 <Icon name="arrow" size={16} />
+    <div className="about-list">
+      <div className="about-row">
+        <div>
+          <strong>版本</strong>
+          <span>{version ? `v${version.replace(/^v/, '')}` : ''}{status ? ` · ${status}` : ''}</span>
+        </div>
+        {update.phase==='available' ? <button className="primary" disabled={channel!==update.channel} onClick={()=>void change(()=>api.desktop.updater.download())}>下载更新</button>
+          : update.phase==='downloading' ? <button onClick={()=>void change(()=>api.desktop.updater.cancel())}>取消下载</button>
+          : update.phase==='ready' ? <button className="primary" disabled={channel!==update.channel} onClick={()=>void change(()=>api.desktop.updater.install())}>重启并安装</button>
+          : <button disabled={busy} onClick={()=>void change(()=>api.desktop.updater.check(channel))}>{update.phase==='checking'?'正在检查…':'检查更新'}</button>}
+      </div>
+      {update.phase==='downloading'&&<progress value={update.percent??0} max={100} aria-label="更新下载进度"/>}
+      {update.phase==='ready'&&<p className="about-note">安装会关闭应用并重启，请先保存尚未保留的文字。</p>}
+      {update.releaseNotes&&<details className="about-notes"><summary>版本说明 · {update.version}</summary><Markdown text={update.releaseNotes}/></details>}
+      {error&&<p className="inline-error" role="alert">{error}</p>}
+      <div className="about-row">
+        <strong>接收测试版</strong>
+        <Toggle checked={channel==='beta'} disabled={busy} onChange={(v:boolean)=>{const c=v?'beta':'stable';setChannel(c);void change(()=>api.desktop.updater.check(c))}} label="接收测试版" />
+      </div>
+      <button className="about-row about-link" onClick={()=>open('https://github.com/ct-jyjntc/opentype-public/releases')}>
+        <strong>发布页</strong><Icon name="external" size={18} />
       </button>
-      <p className="muted">
-        本地语音识别由 SenseVoice Small 提供。
-        <br />
-        文字整理可选 DeepSeek 官方服务。
-      </p>
+      <button className="about-row about-link" onClick={()=>open('https://github.com/ct-jyjntc/opentype-public')}>
+        <strong>源代码</strong><Icon name="external" size={18} />
+      </button>
     </div>
   )
 }
