@@ -1,0 +1,70 @@
+# OpenType
+
+本地优先的语音输入法。使用快捷键开始说话，再次按键结束；也可配置为按住说话。识别结果可直接写入当前输入框。
+
+公开仓库：<https://github.com/ct-jyjntc/opentype-public>。当前源码版本为 `0.2.0-beta.22`。本仓库从经过整理的源码快照开始，不迁移旧 Git 历史、私有部署资料、用户数据或旧安装包。
+
+## 功能
+
+- **SenseVoice Small INT8 本地识别**：支持中文、粤语、英语、日语和韩语；模型在独立进程中运行，支持 WAV 与 Ogg Opus。
+- **自然停顿提前识别**：录音期间处理已完成的片段，停止后补齐尾段并合并全文。总录音时长没有产品限制，仍受设备资源约束。
+- **语音输入与安全写入**：快捷键录入、听写、翻译、随便问；插入前校验目标，发生目标变化时保留可恢复内容。
+- **写作辅助**：Skills、历史、语音词典、选择文字处理、备份和可选自建账号同步。
+- **可选 DeepSeek 整理**：只上传识别文字与允许的文字上下文；在设置中自行配置 API Key，使用系统安全存储加密。关闭整理可仅使用本地识别；翻译和随便问需要文字模型。
+
+当前版本不包含拼音键盘、候选窗、Rime/IMK/TSF 或本地 Whisper。语音词典的发音提示仍保留。应用标识及数据迁移规则保持不变，升级不会主动删除旧版个人词库。
+
+## 开发与构建
+
+当前主要支持 macOS Apple Silicon，最低 macOS 13。需要 Node.js/npm、Xcode Command Line Tools；原生模块需针对 Electron ABI 构建。
+
+```bash
+npm ci
+npm run rebuild:native
+npm run build
+npm start
+```
+
+`npm run build` 编译原生组件、主进程、preload 和 `src/renderer` 可编辑前端。开发时可运行 `npm run dev`；`npm start` 会清除可能导致 Electron 以 Node 模式启动的 `ELECTRON_RUN_AS_NODE`。
+
+麦克风用于录音，辅助功能和输入监控用于全局快捷键及文字写入。按系统提示授予需要的权限；相关权限变更后可能需要重启应用。
+
+在设置页下载 SenseVoice 模型；下载固定版本并校验 SHA-256。开发态路径为 `gateway/models/sensevoice-int8/`，安装版路径为应用数据目录中的 `models/sensevoice-int8/`。模型权重不放入 Git。出处与许可见 [SenseVoice NOTICE](build/third-party/SenseVoice-NOTICE.md)。
+
+```bash
+npm run typecheck
+npm run build:main
+npm run build:renderer
+```
+
+这些命令检查类型与构建，不能代替实际语音、快捷键和写入行为验收。既有测试保留为历史资产；其中依赖私有旧前端参考文件的兼容性探针不适用于独立公开快照，详见 [维护说明](HANDOFF.md)。
+
+## 打包
+
+准备好模型文件后，在 macOS 上生成包含模型的本地测试包：
+
+```bash
+npm run pack:beta
+```
+
+产物位于 `release/testing/<版本>/`，使用本地 ad-hoc 签名，未公证。发布到用户设备前应自行完成 Developer ID 签名、公证和真人验收；安装包、证书及签名配置不提交 Git。
+
+Windows x64 原生源码和 `electron-builder.windows.cjs` 配置保留，需要 Windows SDK、MSVC、CMake 及 x64 Node/Electron。当前仓库的历史验收记录没有 Windows 编译和运行结果，不能视为可用 Windows 发布版。
+
+本次公开迁移没有重新构建或上传安装包。旧版记录中的本机产物链接、内部运行日志和提交号仅为历史说明，不是此公开仓库的可下载资源。
+
+## 目录
+
+- `src/main`：录音编排、快捷键、模型进程、数据库、账号及安全文字交付。
+- `src/renderer`：可编辑 React 前端，Vite 输出到 `dist/renderer`。
+- `src/preload`：受控桌面 API 桥接。
+- `native`：macOS Swift helper、Windows 语音原生组件。
+- `server`：可选自建账号、历史与语音词典同步服务源码。
+- `gateway`：历史 HTTP 协议适配器；桌面内置 SenseVoice 不依赖它。
+- `docs`：设计、版本说明及历史人工验收记录。
+
+## 安全与验收
+
+真实凭据、部署配置、用户 profile、词库、录音、数据库、备份和日志禁止提交。使用忽略的本地环境文件，提交示例只保留空值或明确占位符；详见 [SECURITY](SECURITY.md)。
+
+最近的 UI 行为与待验范围见 [beta.22 版本说明](docs/releases/0.2.0-beta.22.md) 和 [真人复测清单](docs/testing/OpenType-0.2.0-beta.22-测试结果.md)。较早文档为历史记录，可能描述已移除功能。请使用合成内容复测，并在报告中删除密钥、个人数据与部署信息。

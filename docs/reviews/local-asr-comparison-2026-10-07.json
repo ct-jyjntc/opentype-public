@@ -1,0 +1,407 @@
+{
+  "timestamp": "2026-10-07T13:49:32.771Z",
+  "machine": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M4"
+  },
+  "scope": "Eight macOS TTS utterances, two repeats, same 16 kHz mono PCM WAV files. Auto language, ITN enabled. Backend latency only; no microphone, refinement, GUI or text insertion. Not a representative accuracy benchmark.",
+  "memoryCaveat": "Whole process RSS, not model bytes. SenseVoice reports process high-water mark; Whisper reports sampled host RSS, which does not fully describe Metal allocations. Not directly equivalent peak-memory measurements.",
+  "models": {
+    "sensevoice": {
+      "ready": true,
+      "initMs": 739.1,
+      "rssMiB": 892.6,
+      "modelBytes": 239233841,
+      "runtime": "sherpa-onnx-node 1.13.8 CPU, 2 threads, INT8",
+      "revision": "2365baeacb507f821a0c8120fcee3d484dba7a07",
+      "modelSha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+    },
+    "whisper": {
+      "initMs": 1528.8,
+      "rssMiB": 1769.8,
+      "modelBytes": 1624555275,
+      "runtime": "whisper.cpp large-v3-turbo, Metal, 4 CPU threads; HTTP /inference includes request overhead"
+    }
+  },
+  "samples": [
+    {
+      "id": "zh-short",
+      "voice": "Tingting",
+      "text": "明天下午三点开会，讨论下个季度的产品路线图。",
+      "duration": 5.135625,
+      "audioSha256": "d2c2738b1cf608f6bb58b4c59f9613164bf6f5eb4dbc50bf7f17842de5993bba"
+    },
+    {
+      "id": "en-short",
+      "voice": "Samantha",
+      "text": "Let us meet at three p m tomorrow to discuss the product roadmap.",
+      "duration": 3.719563,
+      "audioSha256": "861f323bac4a0228e219ae1349156c8f8d861b92d499c0c4511870b16c81f999"
+    },
+    {
+      "id": "zh-numbers",
+      "voice": "Tingting",
+      "text": "订单编号是一二三四五，价格是二百九十九元，打八五折，联系电话是一三八零零一三八零零零。",
+      "duration": 9.966063,
+      "audioSha256": "220cafa6a394594b8f9bd413cfed11237b73e887b9b111c95dc7142b52814425"
+    },
+    {
+      "id": "zh-correction",
+      "voice": "Tingting",
+      "text": "嗯，那个，请把会议安排在周三，不对，改成周四上午十点，通知产品组和研发组。",
+      "duration": 8.968188,
+      "audioSha256": "5128819d8a4f328385340c44b6fb2e5cf57261c74ef2e1cc71d912e3da61cf15"
+    },
+    {
+      "id": "zh-mixed",
+      "voice": "Tingting",
+      "text": "请用 TypeScript 修改 OpenType 的 API，把 GitHub 上的 pull request 发给我。",
+      "duration": 7.412375,
+      "audioSha256": "61c6d0fef7f0f31ec60087528dbace92fbd0c4ed785bd0d388868921184db3da"
+    },
+    {
+      "id": "en-terms",
+      "voice": "Samantha",
+      "text": "Please update the TypeScript client, check the PostgreSQL connection, and review the GitHub pull request.",
+      "duration": 6.441625,
+      "audioSha256": "b63d104df97c9bf105c156c972b650b0d29d6a008c8367a76cb104020f0fb985"
+    },
+    {
+      "id": "zh-long",
+      "voice": "Tingting",
+      "text": "今天我们主要讨论三个问题。第一，语音识别需要在本地完成，减少网络延迟。第二，用户添加的专有名词应该用于纠正识别结果。第三，网络断开的时候仍然可以正常听写。请整理这几项需求，并且在下周五之前完成第一轮测试。",
+      "duration": 23.608313,
+      "audioSha256": "963ada18b2d41744964ae86b279cf659f51da6245df2243f175886f6e10d97f3"
+    },
+    {
+      "id": "en-long",
+      "voice": "Samantha",
+      "text": "There are three things we need to improve before the next release. First, speech recognition should run locally to reduce latency. Second, custom vocabulary should help recognize names and technical terms. Finally, users should still be able to dictate when the internet connection is unavailable.",
+      "duration": 17.322,
+      "audioSha256": "d1ecedc87bfb119495d2472ed6d5006ac40445b5e7363485905e18e40f9b2c0e"
+    }
+  ],
+  "results": [
+    {
+      "backend": "sensevoice",
+      "id": "zh-short",
+      "repeat": 1,
+      "text": "明天下午3点开会讨论下个季度的产品路线图。",
+      "language": "<|zh|>",
+      "elapsedMs": 118.8,
+      "rssMiB": 904.9,
+      "peakRssMiB": 904.9,
+      "rtf": 0.02313253012048193
+    },
+    {
+      "backend": "sensevoice",
+      "id": "zh-short",
+      "repeat": 2,
+      "text": "明天下午3点开会讨论下个季度的产品路线图。",
+      "language": "<|zh|>",
+      "elapsedMs": 101,
+      "rssMiB": 905.8,
+      "peakRssMiB": 905.8,
+      "rtf": 0.019666544967749788
+    },
+    {
+      "backend": "sensevoice",
+      "id": "en-short",
+      "repeat": 1,
+      "text": "Let us meet at 3 pm tomorrow to discuss the product roadmap.",
+      "language": "<|en|>",
+      "elapsedMs": 76.1,
+      "rssMiB": 906,
+      "peakRssMiB": 906,
+      "rtf": 0.020459392675967577
+    },
+    {
+      "backend": "sensevoice",
+      "id": "en-short",
+      "repeat": 2,
+      "text": "Let us meet at 3 pm tomorrow to discuss the product roadmap.",
+      "language": "<|en|>",
+      "elapsedMs": 81.8,
+      "rssMiB": 906.2,
+      "peakRssMiB": 906.2,
+      "rtf": 0.021991830760764098
+    },
+    {
+      "backend": "sensevoice",
+      "id": "zh-numbers",
+      "repeat": 1,
+      "text": "订单编号是12345，价格是299元，打85折，联系电话是13800138000。",
+      "language": "<|zh|>",
+      "elapsedMs": 181,
+      "rssMiB": 923.4,
+      "peakRssMiB": 923.4,
+      "rtf": 0.018161635141178616
+    },
+    {
+      "backend": "sensevoice",
+      "id": "zh-numbers",
+      "repeat": 2,
+      "text": "订单编号是12345，价格是299元，打85折，联系电话是13800138000。",
+      "language": "<|zh|>",
+      "elapsedMs": 170.2,
+      "rssMiB": 923.8,
+      "peakRssMiB": 923.8,
+      "rtf": 0.017077957464246413
+    },
+    {
+      "backend": "sensevoice",
+      "id": "zh-correction",
+      "repeat": 1,
+      "text": "嗯，那个请把会议安排在周三不对，改成周四上午10点通知产品组和研发组。",
+      "language": "<|zh|>",
+      "elapsedMs": 153.4,
+      "rssMiB": 923,
+      "peakRssMiB": 924.1,
+      "rtf": 0.017104904580501658
+    },
+    {
+      "backend": "sensevoice",
+      "id": "zh-correction",
+      "repeat": 2,
+      "text": "嗯，那个请把会议安排在周三不对，改成周四上午10点通知产品组和研发组。",
+      "language": "<|zh|>",
+      "elapsedMs": 150.6,
+      "rssMiB": 919,
+      "peakRssMiB": 924.1,
+      "rtf": 0.01679268989454726
+    },
+    {
+      "backend": "sensevoice",
+      "id": "zh-mixed",
+      "repeat": 1,
+      "text": "请用typepescript修改open type AI把geh上的po request发给我。",
+      "language": "<|zh|>",
+      "elapsedMs": 125.3,
+      "rssMiB": 919.1,
+      "peakRssMiB": 924.1,
+      "rtf": 0.0169041636452554
+    },
+    {
+      "backend": "sensevoice",
+      "id": "zh-mixed",
+      "repeat": 2,
+      "text": "请用typepescript修改open type AI把geh上的po request发给我。",
+      "language": "<|zh|>",
+      "elapsedMs": 125.6,
+      "rssMiB": 918.6,
+      "peakRssMiB": 924.1,
+      "rtf": 0.016944636503145077
+    },
+    {
+      "backend": "sensevoice",
+      "id": "en-terms",
+      "repeat": 1,
+      "text": "Please update the Typescriptri client, check the Postger SQL connection and review the GitHub Po request.",
+      "language": "<|en|>",
+      "elapsedMs": 113.6,
+      "rssMiB": 918.8,
+      "peakRssMiB": 924.1,
+      "rtf": 0.017635301651369024
+    },
+    {
+      "backend": "sensevoice",
+      "id": "en-terms",
+      "repeat": 2,
+      "text": "Please update the Typescriptri client, check the Postger SQL connection and review the GitHub Po request.",
+      "language": "<|en|>",
+      "elapsedMs": 114.6,
+      "rssMiB": 919.2,
+      "peakRssMiB": 924.1,
+      "rtf": 0.01779054198280713
+    },
+    {
+      "backend": "sensevoice",
+      "id": "zh-long",
+      "repeat": 1,
+      "text": "今天我们主要讨论三个问题。第一，语音识别需要在本地完成，减少网络延迟。第二，用户添加的专有名词应该用于纠正识别结果。第三，网络断开的时候仍然可以正常听写，请整理这几项需求，并且在下周五之前完成第一轮测试。",
+      "language": "<|zh|>",
+      "elapsedMs": 427.5,
+      "rssMiB": 960.8,
+      "peakRssMiB": 960.8,
+      "rtf": 0.018108028303420072
+    },
+    {
+      "backend": "sensevoice",
+      "id": "zh-long",
+      "repeat": 2,
+      "text": "今天我们主要讨论三个问题。第一，语音识别需要在本地完成，减少网络延迟。第二，用户添加的专有名词应该用于纠正识别结果。第三，网络断开的时候仍然可以正常听写，请整理这几项需求，并且在下周五之前完成第一轮测试。",
+      "language": "<|zh|>",
+      "elapsedMs": 447.7,
+      "rssMiB": 960.2,
+      "peakRssMiB": 961.6,
+      "rtf": 0.01896365911448226
+    },
+    {
+      "backend": "sensevoice",
+      "id": "en-long",
+      "repeat": 1,
+      "text": "There are three things we need to improve before the next release First, speech recognition should run locally to reduce latency; Second, custom vocabulary should help recognize names and technical terms; finally, users should still be able to dictate when the internet connection is unavailable.",
+      "language": "<|en|>",
+      "elapsedMs": 397.4,
+      "rssMiB": 950.9,
+      "peakRssMiB": 961.6,
+      "rtf": 0.02294192356540815
+    },
+    {
+      "backend": "sensevoice",
+      "id": "en-long",
+      "repeat": 2,
+      "text": "There are three things we need to improve before the next release First, speech recognition should run locally to reduce latency; Second, custom vocabulary should help recognize names and technical terms; finally, users should still be able to dictate when the internet connection is unavailable.",
+      "language": "<|en|>",
+      "elapsedMs": 338.6,
+      "rssMiB": 934.5,
+      "peakRssMiB": 961.6,
+      "rtf": 0.019547396374552592
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-short",
+      "repeat": 1,
+      "text": "明天下午三点开会,讨论下个季度的产品路线图。",
+      "elapsedMs": 3025.9,
+      "rssMiB": 1786.2,
+      "rtf": 0.5891980041377632
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-short",
+      "repeat": 2,
+      "text": "明天下午三点开会,讨论下个季度的产品路线图。",
+      "elapsedMs": 2990.9,
+      "rssMiB": 1785.3,
+      "rtf": 0.5823828647925033
+    },
+    {
+      "backend": "whisper",
+      "id": "en-short",
+      "repeat": 1,
+      "text": "Let us meet at 3 p.m. tomorrow to discuss the product roadmap.",
+      "elapsedMs": 2952.2,
+      "rssMiB": 1786.6,
+      "rtf": 0.793695388409875
+    },
+    {
+      "backend": "whisper",
+      "id": "en-short",
+      "repeat": 2,
+      "text": "Let us meet at 3 p.m. tomorrow to discuss the product roadmap.",
+      "elapsedMs": 2979.9,
+      "rssMiB": 1786.7,
+      "rtf": 0.8011424998044125
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-numbers",
+      "repeat": 1,
+      "text": "订单编号是12345,价格是299元,打85折,联系电话是13800138000。",
+      "elapsedMs": 3479.2,
+      "rssMiB": 1789.3,
+      "rtf": 0.3491047568131969
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-numbers",
+      "repeat": 2,
+      "text": "订单编号是12345,价格是299元,打85折,联系电话是13800138000。",
+      "elapsedMs": 3430.5,
+      "rssMiB": 1791.2,
+      "rtf": 0.3442181732144378
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-correction",
+      "repeat": 1,
+      "text": "嗯,那个,请把会议安排在周三,不对,改成周四上午十点,通知产品组和研发组。",
+      "elapsedMs": 3566.2,
+      "rssMiB": 1700.5,
+      "rtf": 0.3976500046609192
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-correction",
+      "repeat": 2,
+      "text": "嗯,那个,请把会议安排在周三,不对,改成周四上午十点,通知产品组和研发组。",
+      "elapsedMs": 3550.9,
+      "rssMiB": 1663.2,
+      "rtf": 0.39594397441266843
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-mixed",
+      "repeat": 1,
+      "text": "請用 TypeScript修改 OpenType 的 API,把 GitHub 上的 pull request 發給我。",
+      "elapsedMs": 3284.6,
+      "rssMiB": 1636.1,
+      "rtf": 0.4431238300814516
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-mixed",
+      "repeat": 2,
+      "text": "請用 TypeScript修改 OpenType 的 API,把 GitHub 上的 pull request 發給我。",
+      "elapsedMs": 3265.7,
+      "rssMiB": 1636.3,
+      "rtf": 0.4405740400344019
+    },
+    {
+      "backend": "whisper",
+      "id": "en-terms",
+      "repeat": 1,
+      "text": "Please update the TypeScript client, check the PostgreSQL connection, and review the GitHub\n pool request.",
+      "elapsedMs": 3151.2,
+      "rssMiB": 1637.1,
+      "rtf": 0.4891933324277647
+    },
+    {
+      "backend": "whisper",
+      "id": "en-terms",
+      "repeat": 2,
+      "text": "Please update the TypeScript client, check the PostgreSQL connection, and review the GitHub\n pool request.",
+      "elapsedMs": 3124.2,
+      "rssMiB": 1637.5,
+      "rtf": 0.4850018434789358
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-long",
+      "repeat": 1,
+      "text": "今天我们主要讨论三个问题\n第一\n语音识别需要在本地完成\n减少网络延迟\n第二\n用户添加的专有名词应该用于纠正识别结果\n第三\n网络断开的时候仍然可以正常听写\n请整理这几项需求\n并且在下周五之前完成第一轮测试",
+      "elapsedMs": 4105.6,
+      "rssMiB": 1644.9,
+      "rtf": 0.17390484445034257
+    },
+    {
+      "backend": "whisper",
+      "id": "zh-long",
+      "repeat": 2,
+      "text": "今天我们主要讨论三个问题\n第一\n语音识别需要在本地完成\n减少网络延迟\n第二\n用户添加的专有名词应该用于纠正识别结果\n第三\n网络断开的时候仍然可以正常听写\n请整理这几项需求\n并且在下周五之前完成第一轮测试",
+      "elapsedMs": 4110.4,
+      "rssMiB": 1645.2,
+      "rtf": 0.17410816266287218
+    },
+    {
+      "backend": "whisper",
+      "id": "en-long",
+      "repeat": 1,
+      "text": "There are three things we need to improve before the next release.\n First, speech recognition should run locally to reduce latency.\n Second, custom vocabulary should help recognize names and technical terms.\n Finally, users should still be able to dictate when the internet connection is unavailable.",
+      "elapsedMs": 3405,
+      "rssMiB": 1646.2,
+      "rtf": 0.19657083477658469
+    },
+    {
+      "backend": "whisper",
+      "id": "en-long",
+      "repeat": 2,
+      "text": "There are three things we need to improve before the next release.\n First, speech recognition should run locally to reduce latency.\n Second, custom vocabulary should help recognize names and technical terms.\n Finally, users should still be able to dictate when the internet connection is unavailable.",
+      "elapsedMs": 3358.8,
+      "rssMiB": 1646.8,
+      "rtf": 0.19390370626948392
+    }
+  ]
+}

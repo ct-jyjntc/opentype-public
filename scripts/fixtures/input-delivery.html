@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="UTF-8">
+<style>
+body{font:15px system-ui;padding:22px;background:#f6f7f5;color:#20251f}
+textarea,[contenteditable]{display:block;width:94%;min-height:64px;font:21px system-ui;margin:10px 0;padding:8px;border:1px solid #999;background:white}
+input{font:16px system-ui;margin:8px;padding:8px;width:40%}button{padding:8px;margin:5px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px system-ui}
+</style>
+<h1 id="title"></h1>
+<p>合成测试字段。Ctrl+Shift+C 捕获听写目标，Ctrl+Shift+Q 捕获随便问选区，Ctrl+Shift+V 交付测试文字。</p>
+<textarea aria-label="普通输入框">Before🙂After</textarea>
+<div contenteditable="true" role="textbox" aria-multiline="true" aria-label="富文本输入框"><b>粗体开头</b><span>🙂中间</span><div><i>第二段结束</i></div></div>
+<input aria-label="只读测试框" readonly value="Read only selected words">
+<input type="password" aria-label="安全测试框" value="synthetic-only">
+<p tabindex="0" aria-label="只读文章">OpenType 测试文章：自然停顿能让长录音更快完成。</p>
+<button onclick="qa.show('A')">显示窗口 A</button><button onclick="qa.show('B')">显示窗口 B</button>
+<pre aria-live="polite" id="state">等待操作</pre>
+<script>
+const label=new URL(location).searchParams.get('label');document.title='OpenType 交付测试 '+label;document.querySelector('#title').textContent=document.title;
+document.addEventListener('keydown',e=>{if(e.ctrlKey&&e.shiftKey&&['c','q','v'].includes(e.key.toLowerCase())){e.preventDefault();const k=e.key.toLowerCase();k==='v'?qa.deliver():qa.capture(k==='q'?'command':'dictation')}});
+qa.onState(s=>document.querySelector('#state').textContent=s);
+</script>
+</html>

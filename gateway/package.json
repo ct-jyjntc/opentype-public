@@ -1,0 +1,13 @@
+{
+  "name": "voxtype-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "VoxType 本地网关：协议适配 + 润色编排",
+  "scripts": {
+    "build": "esbuild src/server.ts --bundle --platform=node --format=esm --outfile=dist/server.mjs --external:undici --log-level=warning",
+    "start": "node dist/server.mjs",
+    "dev": "esbuild src/server.ts --bundle --platform=node --format=esm --outfile=dist/server.mjs --external:undici --log-level=warning && node dist/server.mjs",
+    "test": "node test/gateway.test.mjs"
+  }
+}

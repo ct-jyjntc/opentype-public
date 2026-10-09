@@ -1,0 +1,70 @@
+{
+  "timestamp": "2026-10-07T13:32:57.167Z",
+  "baseUrl": "http://127.0.0.1:19109",
+  "scope": "LocalProvider + gateway + real whisper.cpp; macOS TTS inputs; no microphone or human/noise evaluation; refinement disabled",
+  "model": "ggml-large-v3-turbo",
+  "results": [
+    {
+      "id": "zh",
+      "repeat": 1,
+      "duration": 5.135625,
+      "expected": "明天下午三点开会，讨论下个季度的产品路线图。",
+      "actual": "明天下午三点开会,讨论下个季度的产品路线图。",
+      "elapsedMs": 1468
+    },
+    {
+      "id": "zh",
+      "repeat": 2,
+      "duration": 5.135625,
+      "expected": "明天下午三点开会，讨论下个季度的产品路线图。",
+      "actual": "明天下午三点开会,讨论下个季度的产品路线图。",
+      "elapsedMs": 1473
+    },
+    {
+      "id": "zh",
+      "repeat": 3,
+      "duration": 5.135625,
+      "expected": "明天下午三点开会，讨论下个季度的产品路线图。",
+      "actual": "明天下午三点开会,讨论下个季度的产品路线图。",
+      "elapsedMs": 1448
+    },
+    {
+      "id": "zh",
+      "mode": "voice_translation",
+      "success": false,
+      "detail": "refine_unavailable",
+      "rawText": "明天下午三点开会,讨论下个季度的产品路线图。"
+    },
+    {
+      "id": "en",
+      "repeat": 1,
+      "duration": 3.719563,
+      "expected": "Let us meet at three p m tomorrow to discuss the product roadmap.",
+      "actual": "Let us meet at 3 p.m. tomorrow to discuss the product roadmap.",
+      "elapsedMs": 1336
+    },
+    {
+      "id": "en",
+      "repeat": 2,
+      "duration": 3.719563,
+      "expected": "Let us meet at three p m tomorrow to discuss the product roadmap.",
+      "actual": "Let us meet at 3 p.m. tomorrow to discuss the product roadmap.",
+      "elapsedMs": 1330
+    },
+    {
+      "id": "en",
+      "repeat": 3,
+      "duration": 3.719563,
+      "expected": "Let us meet at three p m tomorrow to discuss the product roadmap.",
+      "actual": "Let us meet at 3 p.m. tomorrow to discuss the product roadmap.",
+      "elapsedMs": 1413
+    },
+    {
+      "id": "en",
+      "mode": "voice_translation",
+      "success": false,
+      "detail": "refine_unavailable",
+      "rawText": "Let us meet at 3 p.m. tomorrow to discuss the product roadmap."
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "appId": "dev.opentype.desktop",
+  "productName": "OpenType",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "build/tray.png",
+    "build/tray@2x.png",
+    "build/third-party/**/*",
+    "package.json"
+  ],
+  "asarUnpack": [
+    "node_modules/sherpa-onnx-*/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "native/output-audio/build",
+      "to": "lib/output-audio/build"
+    },
+    {
+      "from": "native/input-helper/build",
+      "to": "lib/input-helper/build"
+    },
+    {
+      "from": "native/keyboard-helper/build",
+      "to": "lib/keyboard-helper/build"
+    },
+    {
+      "from": "native/context-helper/build",
+      "to": "lib/context-helper/build"
+    },
+    {
+      "from": "native/util-helper/build",
+      "to": "lib/util-helper/build"
+    }
+  ],
+  "mac": {
+    "category": "public.app-category.productivity",
+    "target": [
+      {
+        "target": "dmg",
+        "arch": [
+          "arm64"
+        ]
+      },
+      {
+        "target": "zip",
+        "arch": [
+          "arm64"
+        ]
+      }
+    ],
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "需要麦克风权限以进行语音输入。",
+      "NSAppleEventsUsageDescription": "需要向其他应用发送按键事件，以把识别后的文本注入当前输入框。"
+    }
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "ct-jyjntc",
+    "repo": "opentype-public"
+  }
+}

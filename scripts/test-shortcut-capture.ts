@@ -1,0 +1,48 @@
+import assert from 'node:assert/strict'
+import { ShortcutCapture, focusedKeyEvent } from '../src/main/services/shortcut-capture'
+import { HotkeyStateMachine, parseShortcutString } from '../src/main/services/hotkey'
+import type { KeyEvent } from '../src/main/native/keyboard'
+import type { ShortcutCaptureState } from '../src/shared/desktop'
+const changes: ShortcutCaptureState[] = [], actions: string[] = []
+const capture = new ShortcutCapture()
+const hotkeys = new HotkeyStateMachine(e => actions.push(e.action))
+hotkeys.setBindings([parseShortcutString('RightCommand')!])
+let time = Date.now() + 1000
+const event = (key: string, type: 'keyDown'|'keyUp' = 'keyDown', modifiers: string[] = []): KeyEvent => ({key, type, modifiers, keyCode:key==='RightCommand'?54:0, isRepeat:false, timestamp:time++})
+const dispatch = (e: KeyEvent) => { if (!capture.handle(e)) hotkeys.handle(e) }
+capture.begin('one', 1, state => changes.push(state))
+dispatch(event('RightCommand')); dispatch(event('RightCommand','keyUp'))
+assert.equal(changes.at(-1)?.shortcut,'RightCommand'); assert.deepEqual(actions,[])
+dispatch(event('F8')); dispatch(event('F8','keyUp'))
+assert.equal(changes.at(-1)?.shortcut,'F8')
+dispatch(event('F8'));dispatch(event('A'))
+assert.equal(changes.at(-1)?.shortcut,'A','next primary replaces a key with a missing release')
+dispatch(event('A','keyUp'))
+dispatch(event('LeftControl'));dispatch(event('1','keyDown',['Control']))
+assert.equal(changes.at(-1)?.shortcut,'LeftControl+1')
+dispatch(event('1','keyUp'));dispatch(event('LeftControl','keyUp'))
+dispatch(event('LeftShift'));dispatch(event('Fn','keyDown',['Shift']))
+assert.equal(changes.at(-1)?.shortcut,'Fn+LeftShift')
+dispatch(event('Fn','keyUp'));dispatch(event('LeftShift','keyUp'))
+dispatch(event('A'));dispatch(event('A','keyUp'))
+assert.equal(changes.at(-1)?.shortcut,'A','unsupported bare letter is visible and can be rejected at save')
+assert.deepEqual(actions,[])
+capture.end('old-session');assert(capture.active)
+capture.end('one');assert(!capture.active)
+hotkeys.setBindings([parseShortcutString('RightCommand')!])
+dispatch(event('RightCommand'));dispatch(event('RightCommand','keyUp'))
+assert.deepEqual(actions,['start'])
+console.log('OK captured right Command/ordinary/combination keys never trigger recording; closing restores normal hotkeys')
+const drain = new ShortcutCapture()
+drain.begin('held',1,()=>{})
+drain.handle(event('RightCommand'))
+drain.end('held')
+assert(drain.handle(event('RightCommand','keyUp')))
+assert(!drain.handle(event('RightCommand')))
+drain.begin('escape',1,()=>{})
+assert(drain.handle(event('Escape')));assert(!drain.active)
+console.log('OK held key release is drained; stale closes and Escape cannot leave capture active')
+assert.equal(focusedKeyEvent({type:'keyDown',key:'Meta',code:'MetaRight',meta:true})?.key,'RightCommand')
+assert.deepEqual(focusedKeyEvent({type:'keyDown',key:'!',code:'Digit1',shift:true})?.modifiers,['Shift'])
+assert.equal(focusedKeyEvent({type:'keyDown',key:'!',code:'Digit1',shift:true})?.key,'1')
+console.log('OK focused-window key events preserve physical right/left keys and keyboard-layout independent digits')
