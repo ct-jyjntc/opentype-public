@@ -73,8 +73,11 @@ body {
   max-width: 180px;
   padding: 0 4px;
   overflow: hidden;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
+  line-height: 1;
+  /* CJK glyphs sit low in their em box; nudge them to the optical centre. */
+  padding-bottom: 1px;
   white-space: nowrap;
   text-overflow: ellipsis;
   color: #f4f4f5;
