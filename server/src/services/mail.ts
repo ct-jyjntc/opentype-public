@@ -5,9 +5,8 @@
 //   MAIL_API_KEY  可选，Authorization: Bearer
 //   MAIL_FROM     发件人地址
 //
-// 未配置时降级为 console.log——自建部署可能没有邮件服务，
-// 此时调用方在开发环境下把验证码直接返回给客户端（dev_code）。
-// 返回值表示是否真正投递，调用方据此决定要不要附 dev_code。
+// No recipient, verification code or upstream error body is logged.
+// A false result must become a visible delivery failure in production.
 
 import { serviceEndpoint } from './network-policy.ts'
 
@@ -19,6 +18,11 @@ export interface MailMessage {
 
 export function mailConfigured(): boolean {
   return Boolean(process.env.MAIL_API_URL && process.env.MAIL_FROM)
+}
+
+export function developmentEmailCodesAllowed(): boolean {
+  return process.env.NODE_ENV === 'development' && process.env.ALLOW_DEV_EMAIL_CODES === 'true'
+    && ['127.0.0.1', '::1', 'localhost'].includes(process.env.HOST ?? '127.0.0.1')
 }
 
 export async function sendMail(message: MailMessage): Promise<boolean> {

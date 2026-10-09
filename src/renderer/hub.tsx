@@ -514,7 +514,10 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
           <>
             <h1>说第一句话试试</h1>
             <p>
-              点进任意输入框，按 <kbd>{shortcut('dictationMode')}</kbd> 开始说话，再按一次结束，Esc 取消。
+              点进任意输入框，使用 <kbd>{shortcut('dictationMode')}</kbd>：
+              {preferences?.recordingActivation === 'hold' ? '按住说话，松开结束'
+                : preferences?.recordingActivation === 'toggle' ? '按一下开始，再按一下结束'
+                  : '短按开始/停止，长按松手结束'}，Esc 取消。
             </p>
             <div className="onboarding-tips">
               {[

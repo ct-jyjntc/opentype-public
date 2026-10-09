@@ -47,7 +47,7 @@ export function AudioStorageDialog({ onClose, notify }: { onClose: () => void; n
   }
   return <><Modal title="录音存储管理" onClose={() => { if (!busy) onClose() }}>
     <div className="dialog-body audio-storage">
-      <p>这些录音没有对应的历史记录，可以找回或清理。</p>
+      <p>这些录音没有对应的历史记录，可以找回或清理。移入回收站不会释放空间，永久删除后才会释放。</p>
       
       <div className="list-toolbar"><div className="tabs">
         <button disabled={busy} className={tab==='candidates'?'active':''} onClick={()=>{stop();setTab('candidates');setSelected([]);setConfirm(null)}}>待核对录音（{snapshot?.candidates.length ?? 0}）</button>

@@ -21,7 +21,7 @@ export function SettingsBackup({ notify }: { notify:(message:string)=>void }) {
       <label className="backup-choice"><input type="checkbox" checked={settings} disabled={busy} onChange={e=>setSettings(e.target.checked)}/>恢复 {preview.settings} 项写作设置与 {preview.skills} 个 Skill</label>
       <p className="muted">备份里的设置会替换当前设置。</p>
       <label className="backup-choice"><input type="checkbox" checked={dictionary} disabled={busy} onChange={e=>setDictionary(e.target.checked)}/>合并 {preview.words} 条词典：新增 {preview.newWords} 条，{preview.conflicts} 条释义冲突</label>
-      <p className="muted">{preview.dictionaryTarget==='account'?'词条会恢复到当前账号词典。':'词条会恢复到本机词典。'}</p>
+      <p className="muted">{preview.dictionaryTarget==='account'?'词条会恢复到当前账号词典；开启词库同步后会上传。':'词条会恢复到本机词典。'}</p>
       <label className="field">同词条释义冲突时<select disabled={busy||!dictionary} value={conflict} onChange={e=>setConflict(e.target.value as 'keep'|'replace')}><option value="keep">保留本机释义</option><option value="replace">使用备份释义</option></select></label>
       <p className="muted">合并会保留当前词典里独有的词。</p>
       {error&&<p role="alert" className="inline-error">{error}</p>}

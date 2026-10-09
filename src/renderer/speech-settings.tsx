@@ -105,22 +105,32 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     } finally { savingRef.current = false; setSaving(false) }
     return false
   }
-  const next = async () => { if (!dirty || await save()) onDone?.() }
+  const next = async () => {
+    if (!loaded || conflict || savingRef.current) return
+    if (provider === 'siliconflow' && !effectiveCloudKey) {
+      setFailed(true); setMessage('请填写云端 Key，或切换到本地并准备模型。'); return
+    }
+    if (provider === 'local' && status?.state !== 'ready') {
+      setFailed(true); setMessage('请先准备本地模型，再继续。'); return
+    }
+    if (!dirty || await save()) onDone?.()
+  }
   const busyModel = status?.state === 'downloading' || status?.state === 'installing' || status?.state === 'checking'
   return (
     <main className={`speech-settings ${embedded ? 'embedded' : ''} ${onboarding ? 'onboarding' : ''}`}>
       {!onboarding && <h1>听写模型</h1>}
       {conflict && <div className="speech-conflict" role="alert">
         <p>设置在别的窗口改过了。</p>
-        <button disabled={saving || !loaded} onClick={() => void reload()}>重新载入</button>
+        <button disabled={saving} onClick={() => void reload()}>放弃修改并重新载入</button>
       </div>}
+      {!loaded && failed && !conflict && <button onClick={() => void reload()}>重新读取设置</button>}
       <fieldset disabled={!loaded || saving || conflict}>
         <section>
           <h2>语音识别</h2>
           <div role="radiogroup" aria-label="语音识别方式" className="choices">
             <label className={`choice ${provider === 'siliconflow' ? 'selected' : ''}`}>
               <input type="radio" name="speech-provider" value="siliconflow" checked={provider === 'siliconflow'} onChange={() => { changed(); setProvider('siliconflow') }} />
-              <span><strong>云端</strong><small>不用下载，录音会上传</small></span>
+              <span><strong>云端</strong><small>录音上传到 SiliconFlow</small></span>
             </label>
             <label className={`choice ${provider === 'local' ? 'selected' : ''}`}>
               <input type="radio" name="speech-provider" value="local" checked={provider === 'local'} onChange={() => { changed(); setProvider('local') }} />
@@ -153,7 +163,7 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
             <h2>文字整理</h2>
             <Toggle label="文字整理" checked={enabled} onChange={value => { changed(); setEnabled(value) }} />
           </div>
-          <p>去掉口头禅、理顺标点，翻译和随便问也靠它。</p>
+          <p>去掉口头禅、理顺标点，翻译和随便问也靠它。开启后，识别文字与允许的文字上下文会发送到整理服务。</p>
           {enabled && <>
             <label className="key-label">
               <span className="key-head">DeepSeek API Key{hasKey && <small>{clearKey ? '保存后清除' : '已保存'}</small>}</span>
@@ -167,7 +177,7 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
       <footer>
         {onboarding ? <>
           <button className="primary large" disabled={!loaded || saving || conflict} onClick={() => void next()}>{saving ? '正在保存…' : '继续'} <Icon name="arrow" /></button>
-          {onBack && <button className="ghost" onClick={onBack}>上一步</button>}
+          {onBack && <button className="ghost" disabled={saving} onClick={onBack}>上一步</button>}
           <span role={failed ? 'alert' : 'status'} className={failed ? 'speech-warning' : 'muted'}>{failed ? message : ''}</span>
         </> : <>
           <span role={failed ? 'alert' : 'status'} className={failed ? 'speech-warning' : ''}>{message || (dirty ? '有未保存的修改' : '')}</span>

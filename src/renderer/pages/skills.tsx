@@ -101,7 +101,7 @@ export function SkillsPage({ preferences, save }: { preferences: Preferences; sa
       if(await replace(items)){setEditing(undefined);return true}return false
     }} />}
     {deleting && <Modal title="删除 Skill" onClose={()=>{if(!busy)setDeleting(undefined)}}><div className="dialog-body">
-      <p>删除“{deleting.name}”？历史记录不受影响。</p>
+      <p>删除“{deleting.name}”？历史文字保留，重新识别时不再使用这个 Skill。</p>
       <div className="dialog-actions"><button disabled={busy} onClick={()=>setDeleting(undefined)}>取消</button><button className="danger" disabled={busy} onClick={async()=>{if(await replace(settings.items.filter(s=>s.id!==deleting.id)))setDeleting(undefined)}}>删除 Skill</button></div>
     </div></Modal>}
     {imported && <Modal title="导入 Skills" onClose={()=>{if(!busy)setImported(undefined)}}><div className="dialog-body">

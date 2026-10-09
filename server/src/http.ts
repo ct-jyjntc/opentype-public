@@ -4,6 +4,12 @@
 // 一个路由表 + 手写 multipart 解析足够。这也让部署只需 scp 一个文件。
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { isIP } from 'node:net'
+
+export class HttpError extends Error {
+  readonly status: number
+  constructor(status: number, detail: string) { super(detail); this.status = status }
+}
 
 const MAX_JSON_BODY = 8 * 1024 * 1024      // 8MB，足够 200 条记录的批量推送
 const MAX_MULTIPART_BODY = 64 * 1024 * 1024 // 64MB，约 9 分钟 Opus 的 20 倍余量
@@ -15,8 +21,8 @@ export function readBody(req: IncomingMessage, limit = MAX_JSON_BODY): Promise<B
     req.on('data', (c: Buffer) => {
       size += c.length
       if (size > limit) {
-        reject(new Error('payload_too_large'))
-        req.destroy()
+        chunks.length = 0
+        reject(new HttpError(413, 'payload_too_large'))
         return
       }
       chunks.push(c)
@@ -27,9 +33,21 @@ export function readBody(req: IncomingMessage, limit = MAX_JSON_BODY): Promise<B
 }
 
 export async function readJson<T = Record<string, unknown>>(req: IncomingMessage): Promise<T> {
-  const body = await readBody(req)
+  const authRequest = (req.url ?? '').startsWith('/oauth/')
+  const body = await readBody(req, authRequest ? 16 * 1024 : MAX_JSON_BODY)
   if (body.length === 0) return {} as T
-  return JSON.parse(body.toString('utf8')) as T
+  let value: unknown
+  try { value = JSON.parse(body.toString('utf8')) } catch { throw new HttpError(400, 'invalid_json') }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'invalid_json_object')
+  if (authRequest) {
+    const limits: Record<string, number> = { email:254, password:1024, new_password:1024,
+      display_name:80, code:128, code_verifier:128, state:128, code_challenge:128, refresh_token:256, redirect_uri:512 }
+    for (const [name, length] of Object.entries(limits)) {
+      const field = (value as Record<string, unknown>)[name]
+      if (field !== undefined && (typeof field !== 'string' || field.length > length)) throw new HttpError(400, 'invalid_auth_input')
+    }
+  }
+  return value as T
 }
 
 export interface ParsedMultipart {
@@ -93,7 +111,10 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
   const payload = JSON.stringify(body)
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(payload)
+    'content-length': Buffer.byteLength(payload),
+    'cache-control': 'private, no-store, max-age=0',
+    'cdn-cache-control': 'no-store',
+    'x-content-type-options': 'nosniff'
   })
   res.end(payload)
 }
@@ -136,13 +157,14 @@ export function readMultipart(req: IncomingMessage): Promise<ParsedMultipart> {
   })
 }
 
-/** 客户端 IP。反代后从 X-Forwarded-For 取，仅信任第一跳。 */
+/** Only the local reverse proxy may supply a validated client address. */
 export function clientIp(req: IncomingMessage): string {
-  const fwd = req.headers['x-forwarded-for']
-  if (typeof fwd === 'string' && fwd) return fwd.split(',')[0].trim()
-  const real = req.headers['x-real-ip']
-  if (typeof real === 'string' && real) return real
-  return req.socket.remoteAddress ?? 'unknown'
+  const peer = req.socket.remoteAddress ?? 'unknown'
+  if (process.env.TRUST_PROXY === 'loopback' && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer)) {
+    const real = req.headers['x-real-ip']
+    if (typeof real === 'string' && isIP(real)) return real
+  }
+  return peer
 }
 
 /** 简易内存限流。单进程部署够用；多实例需换 Redis。 */
@@ -153,6 +175,8 @@ export function rateLimit(key: string, limit: number, windowMs: number): boolean
   const bucket = buckets.get(key)
 
   if (!bucket || bucket.resetAt < now) {
+    // Fail closed under a cardinality flood until the regular cleanup runs.
+    if (!bucket && buckets.size >= 50_000) return false
     buckets.set(key, { count: 1, resetAt: now + windowMs })
     return true
   }

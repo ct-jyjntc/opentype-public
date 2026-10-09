@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardMonitorStatus, Preferences, SettingsTab } from '../../shared/desktop'
 import { errorMessage } from '../../shared/desktop'
-import { serviceEndpoint } from '../../shared/network-policy'
 import { COMMON_WRITING_APPS, EXPRESSIONS, type ExpressionStyle, type WritingApp } from '../../shared/output-preferences'
 import { Icon, Modal, Row, Toggle } from '../components/ui'
 import { ShortcutRecorder } from '../components/shortcut-recorder'
@@ -459,9 +458,9 @@ function Account({ notify }: { notify: (s: string) => void }) {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [sync, setSync] = useState<any>(null),
-    [server, setServer] = useState(''),
-    [savedServer, setSavedServer] = useState(''),
+    [accountLoaded, setAccountLoaded] = useState(false),
     [phase, setPhase] = useState('')
+  const authPending = useRef(false)
   const [pendingDeletions, setPendingDeletions] = useState(0)
   const [cloudExcluded, setCloudExcluded] = useState(0), [pendingCloudWipe, setPendingCloudWipe] = useState(false)
   const [confirmWipe, setConfirmWipe] = useState(false), [confirmRetention, setConfirmRetention] = useState<number | null>(null)
@@ -477,14 +476,17 @@ function Account({ notify }: { notify: (s: string) => void }) {
     await refreshLocal()
     if (!status) throw new Error('连不上同步服务')
   }
-  let serverError = ''
-  try { serviceEndpoint(savedServer) } catch (e) { serverError = errorMessage(e) }
+  const loadAccount = async () => {
+    setError('')
+    try { setLogged(await api.auth.isLoggedIn()); setAccountLoaded(true) }
+    catch (e) { setError(errorMessage(e)) }
+  }
   useEffect(() => {
     void api.sync.localStatus().then(s => { setPendingDeletions(s.pendingDeletions); setCloudExcluded(s.cloudExcluded ?? 0); setPendingCloudWipe(s.pendingCloudWipe === true) })
+      .catch((e) => setError(errorMessage(e)))
   }, [logged, phase])
   useEffect(() => {
-    void api.auth.isLoggedIn().then(setLogged)
-    void api.config.get().then((c) => { setServer(c.cloudBaseUrl); setSavedServer(c.cloudBaseUrl) })
+    void loadAccount()
     return api.sync.onState((s) => {
       setPhase(s.phase)
       if (s.phase === 'error') setError(errorMessage(s.detail))
@@ -492,10 +494,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
   }, [])
   useEffect(() => {
     if (logged)
-      void api.sync
-        .status()
-        .then(async (status) => { setSync(status); await refreshLocal() })
-        .catch((e) => setError(errorMessage(e)))
+      void refreshSync().catch((e) => setError(errorMessage(e)))
     else setSync(null)
   }, [logged])
   const syncSave = async (p: {
@@ -526,27 +525,28 @@ function Account({ notify }: { notify: (s: string) => void }) {
         <div className="avatar">
           <Icon name="user" size={28} />
         </div>
-        <h2>{logged ? '已登录' : '本地账户'}</h2>
-        <p>不登录也能用。登录后可以在多台设备间同步历史和词典。</p>
-        {serverError && <p className="muted">{serverError}</p>}
+        <h2>{logged ? '已登录' : 'OpenType 账户'}</h2>
+        <p>不登录也能听写。登录后可通过 OpenType 官方服务同步历史和词典。</p>
       </div>
-      {!logged ? (
+      {!accountLoaded ? <p role="status">{error ? <button onClick={() => void loadAccount()}>重新读取账户状态</button> : '正在读取账户状态…'}</p> : !logged ? (
         <form
           onSubmit={async (e) => {
             e.preventDefault()
+            if (authPending.current || busy || !accountLoaded) return
+            authPending.current = true
             setBusy(true)
             setError('')
             try {
-              if (serverError) throw new Error(serverError)
               const r = await (register
-                ? api.auth.register({ email, password })
-                : api.auth.loginWithPassword({ email, password }))
-              if (!r.success) throw new Error(r.detail)
+                ? api.auth.register({ email: email.trim(), password })
+                : api.auth.loginWithPassword({ email: email.trim(), password }))
+              if (!r.success) throw new Error(r.detail || '暂时无法登录，请重试')
               setLogged(true)
               setPassword('')
             } catch (e) {
               setError(errorMessage(e))
             } finally {
+              authPending.current = false
               setBusy(false)
             }
           }}
@@ -556,6 +556,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
             <input
               type="email"
               value={email}
+              disabled={busy}
               required
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="username"
@@ -566,6 +567,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
             <input
               type="password"
               value={password}
+              disabled={busy}
               minLength={register ? 8 : undefined}
               required
               onChange={(e) => setPassword(e.target.value)}
@@ -575,6 +577,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
           <div className="dialog-actions">
             <button
               type="button"
+              disabled={busy}
               onClick={() => {
                 setRegister(!register)
                 setError('')
@@ -582,7 +585,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
             >
               {register ? '已有账户，去登录' : '注册账户'}
             </button>
-            <button className="primary" disabled={busy || !!serverError}>
+            <button className="primary" disabled={busy}>
               {busy ? '处理中…' : register ? '注册并登录' : '登录'}
             </button>
           </div>
@@ -591,11 +594,11 @@ function Account({ notify }: { notify: (s: string) => void }) {
         <>
           <Row
             title="云端同步"
-            description="历史文字会上传到同步服务。"
+            description="开启后，历史文字会上传到 OpenType；录音不参与同步。词典同步在词典页单独开启。"
           >
             <Toggle
               label="云端同步"
-              disabled={busy || phase === 'clearing_cloud'}
+              disabled={busy || !sync || phase === 'clearing_cloud'}
               checked={!!sync?.sync_enabled}
               onChange={(v) => void syncSave({ sync_enabled: v })}
             />
@@ -617,7 +620,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
               <option value={7}>7 天</option>
             </select>
           </Row>
-          {sync && <p className="muted">云端现有 {sync.total ?? 0} 条历史。{sync.cloud_lifecycle_version !== 1 && '当前服务端版本不支持，请先升级。'}</p>}
+          {sync && <p className="muted">云端现有 {sync.total ?? 0} 条历史。{sync.cloud_lifecycle_version !== 1 && '云端保留和清空暂不可用，请稍后重试。'}</p>}
           <div className="dialog-actions">
             <button disabled={busy || phase === 'clearing_cloud'} onClick={async () => {
               setBusy(true); setError('')
@@ -642,9 +645,13 @@ function Account({ notify }: { notify: (s: string) => void }) {
               onClick={() => setConfirmWipe(true)}>{pendingCloudWipe ? '确认上次清空结果' : '清空云端历史'}</button>
             <button
               disabled={busy}
-              onClick={() =>
-                void api.auth.logout().then(() => setLogged(false))
-              }
+              onClick={async () => {
+                if (authPending.current) return
+                authPending.current = true; setBusy(true); setError('')
+                try { await api.auth.logout(); setLogged(false); setPassword('') }
+                catch (e) { setError(errorMessage(e)) }
+                finally { authPending.current = false; setBusy(false) }
+              }}
             >
               退出登录
             </button>
@@ -678,34 +685,6 @@ function Account({ notify }: { notify: (s: string) => void }) {
           {error}
         </p>
       )}
-      <details className="server-settings" open={!!serverError}>
-        <summary>账号服务地址</summary>
-        <label className="field">
-          服务地址
-          <input
-            value={server}
-            onChange={(e) => setServer(e.target.value)}
-            placeholder="https://your-server.example"
-          />
-        </label>
-        <p className="muted">改地址后需要重新登录。</p>
-        <button
-          onClick={() =>
-            void api.config
-              .set({ cloudBaseUrl: server })
-              .then((c) => {
-                setServer(c.cloudBaseUrl)
-                setSavedServer(c.cloudBaseUrl)
-                setError('')
-                setLogged(false)
-                notify('服务地址已保存')
-              })
-              .catch((e) => setError(errorMessage(e)))
-          }
-        >
-          保存地址
-        </button>
-      </details>
     </>
   )
 }
@@ -778,7 +757,7 @@ function Help() {
       ['翻译与随便问如何使用？', '按对应快捷键说话即可，需要先配好文字整理。选中文字再按随便问，可以让它改写或解释。'],
     ]],
     ['隐私与离线', [
-      ['录音会上传吗？', '云端识别会上传录音；本地识别时录音不离开电脑。文字整理会把识别出的文字发给 DeepSeek。'],
+      ['录音会上传吗？', '云端识别会把录音上传到 SiliconFlow；本地识别时录音不离开电脑。开启文字整理后，识别文字与允许的文字上下文会发送到整理服务。'],
       ['离线可以使用吗？', '在「听写模型」选本地识别并下载模型，再关掉文字整理。'],
     ]],
     ['遇到问题', [

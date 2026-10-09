@@ -22,6 +22,8 @@ import {
 
 export interface AuthUser {
   user_id: string
+  /** Origin binding added by the official account store. */
+  server_url?: string
   client_user_id?: string
   email?: string
   access_token: string

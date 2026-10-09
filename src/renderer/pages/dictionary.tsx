@@ -120,7 +120,7 @@ export function DictionaryPage({ notify }: { notify: (s: string) => void }) {
           title={
             loading ? '正在加载…' : query ? '没有匹配的词汇' : '还没有词汇'
           }
-          description="加入人名、品牌、术语，识别会更准。"
+          description="加入人名、品牌、术语，开启文字整理后会参考这些词条。"
         />
       ) : (
         <div className="dictionary-list">
@@ -258,9 +258,7 @@ function WordDialog({
             onChange={(e) => setHint(e.target.value)}
           />
         </label>
-        <p className="muted">
-          
-        </p>
+        <p className="muted">开启文字整理时，词条和提示会随文字发送到整理服务。</p>
         {error && (
           <p role="alert" className="inline-error">
             {error}

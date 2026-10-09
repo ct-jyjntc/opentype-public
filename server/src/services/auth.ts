@@ -77,12 +77,14 @@ function signToken(payload: Record<string, unknown>): string {
 export interface TokenClaims {
   sub: string
   email: string
+  sid: string
   iat: number
   exp: number
 }
 
 /** 校验 access token。返回 null 表示无效或过期。 */
 export function verifyAccessToken(token: string): TokenClaims | null {
+  if (token.length > 8192) return null
   const parts = token.split('.')
   if (parts.length !== 3) return null
   const [header, body, sig] = parts
@@ -95,7 +97,12 @@ export function verifyAccessToken(token: string): TokenClaims | null {
 
   try {
     const claims = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as TokenClaims
-    if (typeof claims.exp !== 'number' || claims.exp * 1000 < Date.now()) return null
+    if (typeof claims.exp !== 'number' || !Number.isFinite(claims.exp) || claims.exp * 1000 <= Date.now()
+      || typeof claims.sub !== 'string' || typeof claims.email !== 'string' || typeof claims.sid !== 'string') return null
+    // A signed token alone must not resurrect a deleted account or a logged-out session.
+    const session = getDb().prepare(`SELECT 1 FROM refresh_tokens r JOIN users u ON u.user_id = r.user_id
+      WHERE r.session_id = ? AND r.user_id = ? AND r.revoked_at IS NULL AND r.expires_at > ?`).get(claims.sid, claims.sub, Date.now())
+    if (!session) return null
     return claims
   } catch {
     return null
@@ -124,6 +131,8 @@ function verifyPassword(password: string, stored: string): boolean {
 // MARK: - 账号操作
 
 export function registerUser(email: string, password: string, displayName?: string): User | { error: string } {
+  if (typeof email !== 'string' || email.length > 254 || typeof password !== 'string' || password.length > 1024
+    || (displayName !== undefined && (typeof displayName !== 'string' || displayName.length > 80))) return { error: 'invalid_auth_input' }
   const db = getDb()
   const normalized = email.trim().toLowerCase()
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalized)) return { error: 'invalid_email' }
@@ -142,6 +151,7 @@ export function registerUser(email: string, password: string, displayName?: stri
 }
 
 export function authenticate(email: string, password: string): User | null {
+  if (typeof email !== 'string' || email.length > 254 || typeof password !== 'string' || password.length > 1024) return null
   const db = getDb()
   const normalized = email.trim().toLowerCase()
   const row = db.prepare(
@@ -188,10 +198,12 @@ export function upsertUserByEmail(email: string): User {
 export function issueTokens(user: User, userAgent?: string): TokenPair {
   const db = getDb()
   const now = Date.now()
+  const sessionId = randomUUID()
 
   const accessToken = signToken({
     sub: user.user_id,
     email: user.email,
+    sid: sessionId,
     iat: Math.floor(now / 1000),
     exp: Math.floor((now + ACCESS_TOKEN_TTL_MS) / 1000)
   })
@@ -200,8 +212,8 @@ export function issueTokens(user: User, userAgent?: string): TokenPair {
   // 而 JWT 无状态特性恰恰让「立即作废」做不到
   const refreshToken = randomBytes(48).toString('base64url')
   db.prepare(
-    'INSERT INTO refresh_tokens (token, user_id, issued_at, expires_at, user_agent) VALUES (?, ?, ?, ?, ?)'
-  ).run(refreshToken, user.user_id, now, now + REFRESH_TOKEN_TTL_MS, userAgent ?? null)
+    'INSERT INTO refresh_tokens (token, user_id, issued_at, expires_at, user_agent, session_id) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(refreshToken, user.user_id, now, now + REFRESH_TOKEN_TTL_MS, userAgent?.slice(0,512) ?? null, sessionId)
 
   return {
     access_token: accessToken,
@@ -378,6 +390,8 @@ export function resetPasswordWithCode(
   code: string,
   newPassword: string
 ): { ok: true } | { error: string } {
+  if (typeof email !== 'string' || email.length > 254 || typeof code !== 'string' || !/^\d{6}$/.test(code)
+    || typeof newPassword !== 'string' || newPassword.length > 1024) return { error: 'invalid_auth_input' }
   const db = getDb()
   const normalized = email.trim().toLowerCase()
   if (newPassword.length < 8) return { error: 'password_too_short' }

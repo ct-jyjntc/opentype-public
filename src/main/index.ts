@@ -38,6 +38,8 @@ import { AuthService, type AuthUser } from './services/auth'
 import { SyncEngine, type SyncRecord } from './services/sync'
 import { syncScope } from './services/sync-scope'
 import { serviceEndpoint, serviceToken, networkSettingsPatch } from '../shared/network-policy'
+import { OFFICIAL_BACKEND_URL } from '../shared/official-backend'
+import { migrateOfficialBackend } from './services/official-backend'
 import { registerRendererBridge } from './services/renderer-bridge'
 import { startCallbackServer, type CallbackServer } from './services/callback-server'
 import type { SpeechProvider } from './services/providers/types'
@@ -143,7 +145,7 @@ const DEFAULT_CONFIG = {
   // 仅用于兼容网关；云端与本机 SenseVoice 均不读取此地址。
   apiBaseUrl: 'http://127.0.0.1:8090',
   // 账号与云端同步走 OpenType 服务端
-  cloudBaseUrl: '',
+  cloudBaseUrl: OFFICIAL_BACKEND_URL,
   historyRetentionDays: 90,
   provider: 'siliconflow',
   sttModel: 'sensevoice-small-int8',
@@ -163,7 +165,7 @@ async function initStore(): Promise<void> {
     // Old profiles without an explicit provider must keep their former local
     // behavior. Only a genuinely new profile defaults to uploading audio.
     defaults: existsSync(join(app.getPath('userData'), 'opentype-config.json'))
-      ? { ...DEFAULT_CONFIG, provider: 'local' }
+      ? { ...DEFAULT_CONFIG, provider: 'local', cloudBaseUrl: '' }
       : DEFAULT_CONFIG
   })
   store = new SecureConfigStore(backend, safeStorage, (issue) => {
@@ -176,6 +178,7 @@ async function initStore(): Promise<void> {
       buttons: ['知道了']
     })
   }) as unknown as StoreInstance
+  migrateOfficialBackend(store as unknown as SecureConfigStore)
   if (store.get('provider') === 'local') store.set({ sttModel: 'sensevoice-small-int8' })
   try {
     await applyPendingRefinement(join(app.getPath('userData'), REFINEMENT_SETUP_FILE), safeStorage,
@@ -186,7 +189,7 @@ async function initStore(): Promise<void> {
   }
 }
 
-const getConfig = (): AppConfig => store?.store ?? (DEFAULT_CONFIG as AppConfig)
+const getConfig = (): AppConfig => ({ ...(store?.store ?? DEFAULT_CONFIG), cloudBaseUrl: OFFICIAL_BACKEND_URL } as AppConfig)
 const getPublicConfig = () => {
   const c = getConfig()
   // Only settings used by the renderer cross this boundary, never store namespaces or secrets.
@@ -654,10 +657,14 @@ function createAuthService(): AuthService {
     load: async () => {
       const raw = store?.get('userData' as keyof AppConfig) as unknown as string | undefined
       if (!raw) return null
-      try { return JSON.parse(raw) as AuthUser } catch { return null }
+      try {
+        const user = JSON.parse(raw) as AuthUser
+        if (user.server_url && user.server_url !== OFFICIAL_BACKEND_URL) return null
+        return user
+      } catch { return null }
     },
     save: async (user) => {
-      store?.set({ userData: user ? JSON.stringify(user) : '' } as unknown as Partial<AppConfig>)
+      store?.set({ userData: user ? JSON.stringify({ ...user, server_url: OFFICIAL_BACKEND_URL }) : '' } as unknown as Partial<AppConfig>)
     }
   })
 }
@@ -754,12 +761,12 @@ function createSyncEngine(): SyncEngine {
     getUserId: () => auth.userId,
     loadSyncBlocked: (userId) => {
       const blocked = (store?.get('syncBlockedUsers' as never) ?? {}) as Record<string, boolean>
-      return blocked[userId] === true
+      return blocked[`${baseUrl}\n${userId}`] === true
     },
     saveSyncBlocked: (userId, disabled) => {
       const blocked = { ...((store?.get('syncBlockedUsers' as never) ?? {}) as Record<string, boolean>) }
-      if (disabled) blocked[userId] = true
-      else delete blocked[userId]
+      if (disabled) blocked[`${baseUrl}\n${userId}`] = true
+      else delete blocked[`${baseUrl}\n${userId}`]
       store?.set({ syncBlockedUsers: blocked } as never)
     },
     loadPendingRecords: async (userId: string, limit: number, includeExhausted?: boolean) => {
@@ -1822,7 +1829,8 @@ function registerIpc(): void {
   ipcMain.handle('local-asr:cancel', event => { modelCaller(event); getLocalModels().dispose() })
   ipcMain.handle('config:get', () => getPublicConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<AppConfig>) => {
-    const allowed = new Set(['mode','shortcuts','outputLanguage','autoInject','micDeviceId','blacklistDomains','apiBaseUrl','cloudBaseUrl','historyRetentionDays','provider','sttModel','refineModel','refineBaseUrl','refineApiKey','enableRefine','apiKey','siliconflowApiKey'])
+    if (patch && typeof patch === 'object' && 'cloudBaseUrl' in patch) throw new Error('official_backend_managed')
+    const allowed = new Set(['mode','shortcuts','outputLanguage','autoInject','micDeviceId','blacklistDomains','apiBaseUrl','historyRetentionDays','provider','sttModel','refineModel','refineBaseUrl','refineApiKey','enableRefine','apiKey','siliconflowApiKey'])
     if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key=>!allowed.has(key))) throw new Error('invalid_config')
     if ('provider' in patch && !['local', 'siliconflow', 'openai', 'custom'].includes(patch.provider!)) throw new Error('invalid_config')
     if ('siliconflowApiKey' in patch) {
@@ -1830,35 +1838,14 @@ function registerIpc(): void {
         || /[^\x21-\x7e]/.test(patch.siliconflowApiKey.trim())) throw new Error('invalid_config')
       patch = { ...patch, siliconflowApiKey: patch.siliconflowApiKey.trim() }
     }
-    const providerKeys = ['provider', 'apiBaseUrl', 'cloudBaseUrl', 'sttModel', 'refineModel', 'enableRefine', 'apiKey', 'siliconflowApiKey', 'refineBaseUrl', 'refineApiKey']
+    const providerKeys = ['provider', 'apiBaseUrl', 'sttModel', 'refineModel', 'enableRefine', 'apiKey', 'siliconflowApiKey', 'refineBaseUrl', 'refineApiKey']
     if (pipeline.isBusy && providerKeys.some(key => key in patch)) throw new Error('请先结束当前听写，再修改识别服务')
     patch = networkSettingsPatch(getConfig(), patch)
     if ('historyRetentionDays' in patch && ![-1,7,30,90].includes(patch.historyRetentionDays!)) throw new Error('invalid_retention')
     if ('shortcuts' in patch && pipeline.isBusy) throw new Error('请先结束当前听写，再修改快捷键')
-    const previousCloudUrl = getConfig().cloudBaseUrl
     if ((patch.provider ?? getConfig().provider) === 'local') patch = { ...patch, sttModel: 'sensevoice-small-int8' }
     store?.set(patch as AppConfig)
     const next = getConfig()
-    if (next.cloudBaseUrl !== previousCloudUrl) {
-      dictionarySync?.suspend()
-      sync.dispose()
-      pipeline.dispose()
-      await auth.logout()
-      // Credentials from the previous server must never be sent to a new endpoint.
-      const rendererStorage = { ...((store?.get('app-storage' as never) ?? {}) as Record<string, unknown>) }
-      delete rendererStorage.userData
-      store?.set({ userData: '', 'app-storage': rendererStorage } as unknown as Partial<AppConfig>)
-      auth = createAuthService()
-      if (callbackServer) auth.setLocalCallbackPort(callbackServer.port)
-      sync = createSyncEngine()
-      await auth.initialize()
-      serviceUserId = auth.userId
-      dictionarySync?.refreshAccount()
-      reloadMainWindowForAuthState()
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (win !== mainWindow) win.webContents.reload()
-      }
-    }
     // provider 相关配置变了需要重建实例（协议/模型/密钥都可能变）
     if (providerKeys.some(key => key in patch)) {
       pipeline.setProvider(buildProvider())
@@ -2054,6 +2041,11 @@ if (gotLock) app.whenReady().then(async () => {
   seedFeatureShortcutBindings()
 
   initDatabase(join(app.getPath('userData'), 'db'))
+  const previousAccountScope = store?.get('accountBackendMigrationScope' as never) as unknown
+  if (typeof previousAccountScope === 'string' && previousAccountScope) {
+    HistoryRepo.preserveLegacyCloudScope(previousAccountScope)
+    store?.set({ accountBackendMigrationScope: '' } as never)
+  }
   dictionarySync = new DictionarySync({
     account:()=>auth.userId?{userId:auth.userId,server:getConfig().cloudBaseUrl}:null,
     token:()=>auth.getAccessToken(),

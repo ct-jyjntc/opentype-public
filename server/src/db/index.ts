@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   issued_at   INTEGER NOT NULL,
   expires_at  INTEGER NOT NULL,
   revoked_at  INTEGER,
+  session_id  TEXT,
   user_agent  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens (user_id, revoked_at);
@@ -197,7 +198,7 @@ CREATE TABLE IF NOT EXISTS history_cloud_wipes (
 CREATE TABLE IF NOT EXISTS sync_settings (
   user_id          TEXT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
   cloud_retention  INTEGER NOT NULL DEFAULT -1,
-  sync_enabled     INTEGER NOT NULL DEFAULT 1,
+  sync_enabled     INTEGER NOT NULL DEFAULT 0,
   purge_before_at  INTEGER,
   cloud_epoch      INTEGER NOT NULL DEFAULT 0,
   updated_at       INTEGER NOT NULL
@@ -222,6 +223,8 @@ export function initDb(options: DbOptions): DatabaseSync {
   db = new DatabaseSync(options.path)
   db.exec(SCHEMA)
   const columns = (table: string) => new Set((db!.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name))
+  if (!columns('refresh_tokens').has('session_id')) db.exec('ALTER TABLE refresh_tokens ADD COLUMN session_id TEXT')
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_session ON refresh_tokens(session_id)')
   if (!columns('dictionary_sync_meta').has('legacy_ids_migrated')) db.exec('ALTER TABLE dictionary_sync_meta ADD COLUMN legacy_ids_migrated INTEGER NOT NULL DEFAULT 0')
   if (!columns('history').has('cloud_received_at')) {
     // Old releases did not retain first upload time. Use their last known

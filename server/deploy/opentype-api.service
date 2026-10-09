@@ -1,0 +1,33 @@
+[Unit]
+Description=OpenType account and synchronization API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opentype
+Group=opentype
+WorkingDirectory=/opt/opentype-api/current
+EnvironmentFile=/etc/opentype/server.env
+ExecStart=/usr/bin/node src/index.ts
+Restart=on-failure
+RestartSec=5
+StateDirectory=opentype
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/opentype
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
