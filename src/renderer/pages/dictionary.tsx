@@ -60,8 +60,8 @@ export function DictionaryPage({ notify }: { notify: (s: string) => void }) {
       <DictionarySyncPanel notify={notify}/>
       <section className="correction-panel">
         <h2>待确认的纠词建议 <span className="count">{proposals.total}</span></h2>
-        <p className="muted">来自历史修改，或开启检测后的本次听写输入框修改，只在本机提取。确认并加入词典后才会供 DeepSeek 整理参考；不会强制替换每一次同音词。</p>
-        {!proposals.total && <p className="muted">尚无待确认建议。可在历史详情修正误识别并保存，或在个性化设置开启输入框纠词检测；两种建议可以分别关闭。</p>}
+        
+        {!proposals.total && <p className="muted">暂时没有。你修改识别错的词后，会出现在这里。</p>}
         {proposals.items.map(c => <div className="correction-row" key={c.id}>
           <div><strong>{c.original} → {c.replacement}</strong><p className="muted">{c.sourceKind === 'input_edit' ? '输入框修改' : '历史修改'} · {c.appName || 'OpenType'} · {new Date(c.createdAt).toLocaleString('zh-CN')}</p></div>
           <div className="inline">
@@ -113,14 +113,14 @@ export function DictionaryPage({ notify }: { notify: (s: string) => void }) {
           <button onClick={() => void load()}>重试</button>
         </div>
       )}
-      {words.length > 200 && <p className="muted">整理时优先使用最近添加的 200 个词条；其余词条仍保存在本机。</p>}
+      {words.length > 200 && <p className="muted">整理时只参考最近的 200 个词。</p>}
       {!filtered.length ? (
         <Empty
           icon="book"
           title={
             loading ? '正在加载…' : query ? '没有匹配的词汇' : '还没有词汇'
           }
-          description="添加您独特的名称和词汇。启用 DeepSeek 整理后，词典会为专有名词的拼写提供参考。"
+          description="加入人名、品牌、术语，识别会更准。"
         />
       ) : (
         <div className="dictionary-list">
@@ -168,14 +168,14 @@ export function DictionaryPage({ notify }: { notify: (s: string) => void }) {
         accept={async (term, hint) => {
           const result = await window.opentype.desktop.corrections.accept(reviewing.id, term, hint,dictionaryScope)
           setReviewing(null); await load()
-          notify(result.added ? '已确认加入词典，可在词典中编辑或删除' : '词典已有该词，保留原有词条')
+          notify(result.added ? '已加入词典' : '词典已有该词，保留原有词条')
         }} />}
       {source && <HistoryDialog key={source.id} item={source} onClose={() => setSource(null)} onChange={() => void load()} notify={notify} />}
       {removing && (
         <Modal title="删除词汇" onClose={() => setRemoving(null)}>
           <div className="dialog-body">
-            <p>确认从个人词典删除“{removing.term}”？{removing.sourceKind && '这会撤销此词条的学习，不会撤销您已经修改的文字。'}</p>
-            {dictionaryScope!=='local'&&<p className="muted">这是账号词典中的词条；开启词库同步后，删除会传播到同账号的其他设备。</p>}
+            <p>确认从个人词典删除“{removing.term}”？</p>
+            {dictionaryScope!=='local'&&<p className="muted">其他同步设备上也会删除。</p>}
             <div className="dialog-actions">
               <button onClick={() => setRemoving(null)}>取消</button>
               <button
@@ -238,7 +238,7 @@ function WordDialog({
           }
         }}
       >
-        {candidate && <p>{candidate.sourceKind === 'input_edit' ? '输入框修改' : '历史修改'}：{candidate.original} → {candidate.replacement}。请确认这是需要长期记住的词汇；可先修改下面的词条范围和提示。{candidate.sourceKind === 'input_edit' && '来源历史保留听写原稿，没有被这次修改覆盖。'}</p>}
+        {candidate && <p>{candidate.sourceKind === 'input_edit' ? '输入框修改' : '历史修改'}：{candidate.original} → {candidate.replacement}。</p>}
         <label className="field">
           词汇
           <input
@@ -259,8 +259,7 @@ function WordDialog({
           />
         </label>
         <p className="muted">
-          用于辅助整理时识别名称和专业术语，不会强制替换每一次同音词。
-          {candidate && '确认后，开启 DeepSeek 整理时词条及提示会随请求发送；来源历史全文不会因此发送。删除来源历史不会删除已确认的独立词条，可在词典中撤销。'}
+          
         </p>
         {error && (
           <p role="alert" className="inline-error">

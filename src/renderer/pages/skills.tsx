@@ -40,10 +40,10 @@ export function SkillsPage({ preferences, save }: { preferences: Preferences; sa
       <h1>Skills</h1>
       <button className="primary" disabled={busy || settings.items.length >= 100} onClick={create}><Icon name="plus" size={16} />新建 Skill</button>
     </div>
-    <p className="page-lede">为邮件、聊天、会议纪要等场景保存处理指令。录音开始时确定本次用哪个 Skill，结束后再处理全文。需要开启 DeepSeek 云端整理。</p>
+    <p className="page-lede">给不同场景定好整理方式，比如邮件、聊天、会议纪要。需要开启文字整理。</p>
     <section className="settings-group">
       <Row title="启用 Skills" description="关闭后恢复普通听写、翻译和随便问。"><Toggle label="启用 Skills" checked={settings.enabled} disabled={busy} onChange={enabled=>void persist({...settings,enabled})} /></Row>
-      <Row title="当前处理方式" description="手动选择优先于自动规则；首页也可以切换。">
+      <Row title="当前处理方式">
         <select aria-label="当前 Skill" value={settings.selected} disabled={busy || !settings.enabled} onChange={e=>void persist({...settings,selected:e.target.value})}>
           <option value="auto">按场景自动选择</option><option value="none">不使用 Skill</option>
           {settings.items.filter(s=>s.enabled).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
@@ -61,16 +61,15 @@ export function SkillsPage({ preferences, save }: { preferences: Preferences; sa
       <input ref={upload} type="file" accept="application/json,.json" hidden onChange={async e=>{
         const file=e.target.files?.[0];e.target.value='';if(!file)return
         try {
-          if(file.size>2*1024*1024)throw new Error('文件过大，请导入不超过 2 MB 的 Skill 文件')
+          if(file.size>2*1024*1024)throw new Error('文件不能超过 2 MB')
           const data=JSON.parse(await file.text())
-          if(data.format!=='opentype-skills'||data.version!==1)throw new Error('不是支持的 OpenType Skills 文件')
+          if(data.format!=='opentype-skills'||data.version!==1)throw new Error('无法识别这个文件')
           const parsed=readSkillSettings({enabled:true,selected:'auto',items:data.items},true)
-          if(parsed.items.length+settings.items.length>100)throw new Error('Skills 总数不能超过 100 个，请先整理现有项目')
+          if(parsed.items.length+settings.items.length>100)throw new Error('Skills 最多 100 个 Skill')
           setImported(parsed.items)
         } catch(e){setError(errorMessage(e))}
       }} />
     </div>
-    <p className="muted list-note">自动规则按列表顺序匹配，第一个符合当前模式、应用和网站的 Skill 生效。网站规则包含子域名；受隐私保护的输入框不会自动匹配。</p>
     {error && <p role="alert" className="inline-error">{error}</p>}
     <div className="skill-list">
       {visible.map(skill=>{
@@ -102,11 +101,11 @@ export function SkillsPage({ preferences, save }: { preferences: Preferences; sa
       if(await replace(items)){setEditing(undefined);return true}return false
     }} />}
     {deleting && <Modal title="删除 Skill" onClose={()=>{if(!busy)setDeleting(undefined)}}><div className="dialog-body">
-      <p>删除“{deleting.name}”？已有历史文字保留，使用它的历史不再自动重试此 Skill。当前选中的 Skill 被删除后会回到自动选择。</p>
+      <p>删除“{deleting.name}”？历史记录不受影响。</p>
       <div className="dialog-actions"><button disabled={busy} onClick={()=>setDeleting(undefined)}>取消</button><button className="danger" disabled={busy} onClick={async()=>{if(await replace(settings.items.filter(s=>s.id!==deleting.id)))setDeleting(undefined)}}>删除 Skill</button></div>
     </div></Modal>}
     {imported && <Modal title="导入 Skills" onClose={()=>{if(!busy)setImported(undefined)}}><div className="dialog-body">
-      <p>将新增 {imported.length} 个 Skill，不覆盖现有项目。导入项的自动规则默认关闭，请先查看指令再启用。</p>
+      <p>将新增 {imported.length} 个 Skill，自动应用默认关闭。</p>
       <p>{imported.map(s=>s.name).join('、')}</p>
       <div className="dialog-actions"><button disabled={busy} onClick={()=>setImported(undefined)}>取消</button><button className="primary" disabled={busy||!imported.length} onClick={async()=>{
         if(await replace([...settings.items,...imported.map(s=>({...s,id:crypto.randomUUID(),automatic:false}))]))setImported(undefined)
@@ -128,8 +127,7 @@ function SkillEditor({ skill, apps, close, save }: { skill: WritingSkill; apps: 
   }}>
     <label className="field">名称<input required maxLength={60} value={draft.name} onChange={e=>patch({name:e.target.value})} /></label>
     <label className="field">说明<input maxLength={320} value={draft.description} onChange={e=>patch({description:e.target.value})} /></label>
-    <label className="field">处理指令<textarea required rows={7} maxLength={8000} value={draft.instructions} onChange={e=>patch({instructions:e.target.value})} placeholder="说明如何处理口述或输入的文字、需要保留的内容和输出格式。" /></label>
-    <p className="muted">指令与待处理文字会发送至配置的 DeepSeek 官方服务。Skill 只生成文字，不自动发送消息或操作其他应用。</p>
+    <label className="field">处理指令<textarea required rows={7} maxLength={8000} value={draft.instructions} onChange={e=>patch({instructions:e.target.value})} placeholder="比如：整理成要点，保留人名和数字" /></label>
     <fieldset className="skill-modes"><legend>适用模式</legend>{SKILL_MODES.map(([mode,label])=><label key={mode}><input type="checkbox" checked={draft.modes.includes(mode)} disabled={draft.modes.length===1&&draft.modes.includes(mode)} onChange={e=>patch({modes:e.target.checked?[...draft.modes,mode]:draft.modes.filter(m=>m!==mode)})}/>{label}</label>)}</fieldset>
     <Row title="按场景自动应用"><Toggle label="按场景自动应用" checked={draft.automatic} onChange={automatic=>patch({automatic})}/></Row>
     {draft.automatic && <div className="skill-scope">
@@ -137,7 +135,7 @@ function SkillEditor({ skill, apps, close, save }: { skill: WritingSkill; apps: 
     <div className="skill-apps">{draft.apps.map(id=><button type="button" key={id} onClick={()=>patch({apps:draft.apps.filter(a=>a!==id)})}>{apps.find(a=>a.bundleId===id)?.appName??id} ×</button>)}</div>
     <div className="skill-toolbar"><input aria-label="自定义应用标识" placeholder="应用标识，如 com.apple.mail" value={customApp} onChange={e=>setCustomApp(e.target.value)}/><button type="button" onClick={()=>{const id=customApp.trim();if(id&&!draft.apps.includes(id))patch({apps:[...draft.apps,id]});setCustomApp('')}}>添加应用</button></div>
     <label className="field">限定网站域名<textarea rows={2} value={domains} onChange={e=>setDomains(e.target.value)} placeholder="每行一个域名，例如 mail.google.com；不要填写网址路径。"/></label>
-    <p className="muted">应用与网站均填写时，需要同时匹配。都留空且开启自动应用时，匹配所有未受隐私保护的输入环境。手动选用不受应用和网站范围限制。</p>
+    <p className="muted">都留空表示所有应用。</p>
     </div>}
     {error&&<p role="alert" className="inline-error">{error}</p>}
     <div className="dialog-actions"><button type="button" disabled={busy} onClick={close}>取消</button><button className="primary" disabled={busy}>{busy?'保存中…':'保存 Skill'}</button></div>
@@ -157,7 +155,7 @@ function SkillWorkbench({ settings }: { settings: SkillSettings }) {
     catch(e){if(current.current===id)setError(errorMessage(e))}
     finally{if(current.current===id){current.current=undefined;setBusy(false);setPreview('')}}
   }
-  return <section className="skill-workbench"><h2>文字工作台</h2><p className="muted">粘贴文字，直接运行保存的 Skill。原文保留，结果由您复制使用。</p>
+  return <section className="skill-workbench"><h2>文字工作台</h2><p className="muted">粘贴一段文字试试效果。</p>
     <div className="skill-toolbar"><select aria-label="文字工作台 Skill" value={skillId} disabled={busy} onChange={e=>setSelected(e.target.value)}>{available.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
       <button className="primary" disabled={busy||!settings.enabled||!skillId||!source.trim()} onClick={()=>void run()}>{busy?'正在处理…':'处理文字'}</button>
       {busy&&<button onClick={()=>{const id=current.current;current.current=undefined;setBusy(false);setPreview('');setError('已取消');if(id)void api.skills.cancel(id).catch(()=>{})}}>取消</button>}

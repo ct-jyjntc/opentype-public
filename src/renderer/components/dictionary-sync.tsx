@@ -31,18 +31,19 @@ export function DictionarySyncPanel({notify}:{notify:(text:string)=>void}){
   }
   if(!status)return error?<p role="alert">{error}</p>:null
   const working=busy||status.phase==='syncing'
+  // Nothing to show until there is an account: the local dictionary just works.
+  if(!status.account&&status.view!=='account'&&!error)return null
   return <section className="dictionary-sync-panel">
     <div className="dictionary-sync-heading"><strong>{status.view==='account'?'当前使用账号词典':'当前使用本机词典'}</strong>
       {status.joined&&<select aria-label="使用的词典" disabled={working} value={status.view} onChange={e=>void run(()=>api.selectView(e.target.value as 'local'|'account',status.accountScope))}>
         <option value="local">本机词典</option><option value="account">当前账号词典</option>
       </select>}
     </div>
-    <p className="muted">{status.view==='account'?'此账号的词典副本保存在本机，离线也能使用。退出账号后切回本机词典。':'本机词典无需登录，不会自动上传到任何账号。'}</p>
     {status.account?<>
       <div className="dictionary-sync-heading"><span>在此设备自动同步账号词典</span><Toggle label="自动同步账号词典" checked={status.enabled} disabled={busy} onChange={enabled=>{
         if(enabled){setError('');setCopy(false);setConfirm('enable')}else void run(()=>api.configure(false,false,status.accountScope))
       }}/></div>
-      <p className="muted">词库同步独立于历史同步，只同步词条与释义。关闭后保留此账号的本机副本和未同步修改。</p>
+      
       <div className="skill-toolbar">
         <button disabled={working||!status.enabled} onClick={()=>void run(()=>api.run())}>{status.phase==='syncing'?'正在同步…':'立即同步'}</button>
         {status.joined&&<button disabled={working} onClick={()=>{setError('');setConfirm('copy')}}>将本机词典复制到此账号</button>}
@@ -50,11 +51,11 @@ export function DictionarySyncPanel({notify}:{notify:(text:string)=>void}){
         <small>{status.pending?`${status.pending} 项待处理，其中 ${status.conflicts} 项冲突`:status.lastSyncedAt?`上次同步 ${new Date(status.lastSyncedAt).toLocaleString()}`:'尚未同步'}</small>
       </div>
       {status.detail&&<p role="status" className="inline-error">{errorMessage(status.detail)}</p>}
-      {conflicts.length>0&&<div className="dictionary-conflicts"><h3>需要选择的词条冲突</h3><p className="muted">两台设备同时修改或删除了这些词条，双方内容均保留在此处。请选择最终采用的一份。</p>
+      {conflicts.length>0&&<div className="dictionary-conflicts"><h3>需要选择的词条冲突</h3><p className="muted">这些词条在两台设备上都改过，选一份保留。</p>
         {conflicts.map(item=><div className="dictionary-conflict" key={item.key}><div><strong>{item.local.term??item.remote.term??item.previous?.term??'词条'}</strong><p>本机：{describe(item.local)}</p><p>云端：{describe(item.remote)}</p></div><button disabled={working} onClick={()=>{setError('');setSelected(item)}}>处理冲突</button></div>)}
         {status.conflicts>conflicts.length&&<p className="muted">当前显示前 {conflicts.length} 项，处理后继续显示其余冲突。</p>}
       </div>}
-    </>:<p className="muted">如需在设备间同步词库，可在“设置 → 账户”配置服务并登录。</p>}
+    </>:null}
     {error&&<p role="alert" className="inline-error">{error}</p>}
     {confirm&&<Modal title={confirm==='enable'?'开启词库同步':confirm==='rebuild'?'重新对齐词库':'复制本机词典'} onClose={()=>{if(!busy)setConfirm(undefined)}}><div className="dialog-body">
       <p>{confirm==='enable'?'此设备将自动同步当前账号的词条、释义和删除操作。首次开启后会使用此账号的本机词典副本。':confirm==='rebuild'?'服务端的词库版本早于本机记录，可能恢复过旧备份。重新对齐会保留本机当前词条及待同步删除，清除旧同步进度，再逐项比对云端词库。':'将当前本机词典复制到这个账号的词典。已存在的词条保留账号词典释义；本机词典原有内容保留。'}</p>
@@ -70,7 +71,6 @@ export function DictionarySyncPanel({notify}:{notify:(text:string)=>void}){
     </div></Modal>}
     {selected&&<Modal title="处理词条冲突" onClose={()=>{if(!busy)setSelected(undefined)}}><div className="dialog-body">
       <p>本机：{describe(selected.local)}</p><p>云端：{describe(selected.remote)}</p>
-      <p className="muted">采用删除的一方会删除另一方的词条；保留已被另一端删除的词条会重新创建它。</p>
       {error&&<p role="alert" className="inline-error">{error}</p>}
       <div className="dialog-actions"><button disabled={busy} onClick={()=>setSelected(undefined)}>稍后处理</button>
         <button disabled={working} onClick={()=>void run(async()=>{await api.resolve(selected.key,selected.remote.revision,'remote',status.accountScope,selected.mutationId);setSelected(undefined)})}>采用云端</button>

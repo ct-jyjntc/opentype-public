@@ -67,7 +67,6 @@ export function HistoryPage({ notify }: { notify: (text: string) => void }) {
       <div className="retention-panel">
         <div>
           <strong>保存历史</strong>
-          <p>选择在此设备上保留历史记录的时间。</p>
         </div>
         <select
           aria-label="历史保留时间"
@@ -125,7 +124,7 @@ export function HistoryPage({ notify }: { notify: (text: string) => void }) {
           description={
             query
               ? '尝试其他关键词。'
-              : '一旦您在不同应用中进行口述，您的所有口述历史将出现在这里。'
+              : '说过的话会出现在这里。'
           }
         />
       ) : (
@@ -182,7 +181,7 @@ export function HistoryPage({ notify }: { notify: (text: string) => void }) {
           {loading ? '正在加载…' : '加载更多'}
         </button>
       )}
-      <p className="page-footnote"><Icon name="lock" size={13} />历史记录只保存在这台设备。云端同步需要您手动开启；启用 DeepSeek 时，识别出的文字会发送到它的官方服务。</p>
+      
       {storageOpen && <AudioStorageDialog onClose={() => setStorageOpen(false)} notify={notify} />}
       {selected && (
         <HistoryDialog
@@ -270,13 +269,13 @@ export function HistoryDialog({
           <span>{record.focusedAppName || 'OpenType'}</span>
           <span>{durationLabel(record.duration)}</span>
         </div>
-        {typeof parseMeta(record.modeMeta).skill_name === 'string' && <p className="muted">本次 Skill：{parseMeta(record.modeMeta).skill_name}。重新识别使用该 Skill 当前保存的指令。</p>}
+        {typeof parseMeta(record.modeMeta).skill_name === 'string' && <p className="muted">本次 Skill：{parseMeta(record.modeMeta).skill_name}。按该 Skill 当前的指令重新处理。</p>}
         {audio ? (
           <audio controls src={audio} aria-label="播放录音" />
         ) : (
           <p className="muted">此记录没有可用的本地录音。</p>
         )}
-        {parseMeta(record.modeMeta).text_version && <p className="muted">已恢复{parseMeta(record.modeMeta).text_version === 'raw' ? '识别原文' : '整理稿'}。此操作只修改历史文字，可复制后使用。</p>}
+        {parseMeta(record.modeMeta).text_version && <p className="muted">已恢复{parseMeta(record.modeMeta).text_version === 'raw' ? '识别原文' : '整理稿'}。只改历史里的文字。</p>}
         <label className="field">
           整理后的文字
           <textarea
@@ -340,9 +339,9 @@ export function HistoryDialog({
                 <p>删除本机记录及录音，无法恢复。</p>
                 {canDeleteCloud ? <label>
                   <input type="checkbox" checked={deleteCloud} onChange={e => setDeleteCloud(e.target.checked)} />
-                  同时删除云端及其他同步设备上的这条记录
-                </label> : <p>如有云端副本，需登录原账号并同步后再选择删除。</p>}
-                {deleteCloud && <p>删除任务会保存在本机，联网并开启此账号的同步后执行。导出文件与系统备份不受影响。</p>}
+                  同时删除云端和其他设备上的记录
+                </label> : <p>要删除云端副本，请先登录原账号。</p>}
+                {deleteCloud && <p>联网并开启同步后执行。</p>}
               </div>
               <button
                 className="danger"
@@ -352,7 +351,7 @@ export function HistoryDialog({
                     .then(() => {
                       onChange()
                       onClose()
-                      notify(deleteCloud ? '本机记录已删除，云端删除已加入同步队列' : '本机记录已删除')
+                      notify(deleteCloud ? '已删除，云端稍后同步删除' : '已删除')
                     })
                     .catch((e) => {
                       if (String(e).includes('audio_cleanup_pending')) {

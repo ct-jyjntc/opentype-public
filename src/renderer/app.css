@@ -1883,3 +1883,58 @@ button.about-link svg { flex-shrink: 0; }
 .speech-settings fieldset:disabled .choice { cursor: default; opacity: .65; }
 .speech-settings .model-status { flex-wrap: wrap; }
 .speech-settings footer .primary { flex-shrink: 0; }
+
+/* ===== Polish pass (2026-10-10) ===== */
+/* sidebar: no promo card, no divider above the bottom icons */
+.sidebar-fill { flex: 1; }
+.sidebar-bottom { border-top: 0; padding-top: 0; }
+/* search fields were invisible on the dotted background */
+.list-toolbar .search { box-shadow: none; border: 1px solid var(--line); }
+/* storage dialog: selection summary was touching the list */
+.audio-storage .storage-summary { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
+/* selection card: select and its button share one height */
+.selection-palette .skill-toolbar { align-items: stretch; }
+.selection-palette .skill-toolbar select, .selection-palette .skill-toolbar button { height: 38px; min-height: 38px; }
+
+/* speech settings: two compact choices, real switch, short key fields */
+.speech-settings .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.speech-settings .choice { display: flex; align-items: center; gap: 12px; padding: 14px 16px; cursor: pointer; }
+.speech-settings .choice span { display: grid; gap: 3px; }
+.speech-settings .choice strong { font-size: 15px; }
+.speech-settings .choice small { font-size: 12.5px; color: var(--muted); }
+.speech-settings section { display: grid; gap: 12px; }
+.speech-settings section > h2, .speech-settings .section-title h2 { margin: 0; }
+.speech-settings .section-title { display: flex; align-items: center; justify-content: space-between; margin: 0; }
+.speech-settings section > p { margin: -4px 0 0; color: var(--muted); font-size: 13px; }
+.speech-settings .key-label { display: grid; gap: 6px; margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
+.speech-settings .key-head { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+.speech-settings .key-head small { font-weight: 500; font-size: 12px; color: var(--ok); }
+.speech-settings .key-action { justify-self: start; margin: -4px 0 0; padding: 0; min-height: 0; border: 0; background: none; color: var(--muted); font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; }
+.speech-settings .speech-warning { margin: 0; font-size: 12.5px; color: var(--warn); }
+.speech-settings .model-status { display: flex; align-items: center; gap: 10px; }
+.speech-settings .model-status progress { flex: 1; }
+.speech-settings fieldset { display: grid; gap: 14px; }
+/* onboarding: the same form, sitting directly on the page */
+.onboarding .speech-settings.onboarding { padding: 0; margin: 0; max-width: 460px; width: 100%; }
+.onboarding .speech-settings.onboarding section { padding: 16px; }
+.onboarding .speech-settings.onboarding footer { justify-content: flex-start; gap: 10px; margin-top: 22px; font-size: 13px; }
+.onboarding .speech-settings.onboarding footer .large { margin: 0; min-height: 48px; padding: 0 22px; border-radius: 14px; background: var(--text); border-color: var(--text); color: var(--bg); font-weight: 700; font-size: 15px; display: inline-flex; align-items: center; gap: 8px; }
+.onboarding .speech-settings.onboarding footer .ghost { border: 0; background: none; color: var(--muted); min-height: 48px; padding: 0 12px; }
+.onb-main { overflow-y: auto; }
+.onb-main > * { flex-shrink: 0; }
+.onboarding .speech-settings.onboarding fieldset { gap: 10px; }
+.onboarding .speech-settings.onboarding section { gap: 10px; border-radius: 16px; }
+.onboarding .speech-settings.onboarding h2 { font-size: 14px; }
+.onboarding main.speech-settings.onboarding { display: block; min-height: 0; height: auto; grid-template-columns: none; overflow: visible; }
+.onboarding main.speech-settings.onboarding section { margin-top: 0; }
+.onboarding main.speech-settings.onboarding footer { display: flex; align-items: center; }
+.onb-main { justify-content: safe center; }
+.speech-settings .key-label .key-head { font-size: 13px; font-weight: 600; color: var(--text); }
+.speech-settings .key-label .key-head small { margin: 0; font-size: 12px; font-weight: 500; color: var(--ok); }
+.speech-settings section .model-status { margin: 0; }
+.speech-settings .choice.selected { box-shadow: none; border-color: var(--accent); }
+.onb-main { padding-top: 100px; padding-bottom: 40px; }
+.onb-capsule .cap-stop { color: #141416; }
+.speech-settings section h2 { margin: 0 !important; }
+.modal .dialog-body.audio-storage > p.storage-summary { margin: 14px 0 0 !important; font-size: 13px !important; color: var(--muted) !important; }
+.modal .dialog-body.audio-storage > p:first-child { margin: 0 0 14px !important; }

@@ -19,6 +19,7 @@ import {
   type SettingsTab,
 } from '../shared/desktop'
 import './app.css'
+import { SpeechSettings } from './speech-settings'
 const api = window.opentype
 function Hub() {
   const [page, setPage] = useState('home'),
@@ -105,11 +106,7 @@ function Hub() {
               </button>
             ))}
           </nav>
-          <button className="sidebar-card" onClick={() => setSettings('speech')}>
-            <strong><Icon name="mic" size={15} />SenseVoice 听写</strong>
-            <span>云端识别无需下载，也可选择本地离线识别。</span>
-            <small>听写模型设置 <Icon name="arrow" size={13} /></small>
-          </button>
+          <span className="sidebar-fill" />
           <div className="sidebar-bottom">
             <IconButton
               name="user"
@@ -282,7 +279,7 @@ function Home({
             (!permissions.accessibility || permissions.microphone !== 3 || permissions.inputMonitoring === false) && (
               <div className="permission-banner">
                 <Icon name="info" />
-                <span>完成权限设置，让 OpenType 随时为您听写。</span>
+                <span>还有权限没开，听写可能用不了。</span>
                 <PermissionButtons
                   permissions={permissions}
                   refresh={() =>
@@ -359,11 +356,11 @@ function Home({
                 </div>
               </div>
             ))}
-            <p className="stat-note">速度与省时按成功听写的原文估算，不含空白、标点及缺少原文的记录；打字速度按每分钟 40 字计算。</p>
+            
           </section>
           <button className="card promo-card green" onClick={() => openSettings('speech')}>
             <h3>隐私由您掌控</h3>
-            <p>选择云端识别时，录音会上传到 SiliconFlow；选择本地识别时，音频在本机处理。开启 <b>文字整理</b> 会发送待处理文字；开启云端同步会把相应文字上传到您配置的同步服务。</p>
+            <p>想完全离线，就用 <b>本地识别</b>，再关掉文字整理。</p>
             <span className="promo-glyph"><Icon name="lock" size={84} /></span>
           </button>
           <button className="card promo-card blue" onClick={() => navigate('dictionary')}>
@@ -449,9 +446,9 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
   }, [])
   const mic = permissions.microphone === 3
   const perms: [string, string, string, boolean, string, string][] = [
-    ['mic', '麦克风', '用于录音，可选择云端或本地识别', mic, '已授权', '待授权'],
-    ['bolt', api.platform === 'darwin' ? '输入监控' : '键盘监听环境', '用于在任何应用里响应快捷键', !!permissions.inputMonitoring, '可用', '尚不可用'],
-    ['pen', api.platform === 'darwin' ? '辅助功能' : '系统输入环境', '用于把文字写进当前输入框', permissions.accessibility, '可用', '尚不可用'],
+    ['mic', '麦克风', '录音', mic, '已授权', '待授权'],
+    ['bolt', api.platform === 'darwin' ? '输入监控' : '键盘监听环境', '在任何应用里响应快捷键', !!permissions.inputMonitoring, '可用', '尚不可用'],
+    ['pen', api.platform === 'darwin' ? '辅助功能' : '系统输入环境', '把文字写进输入框', permissions.accessibility, '可用', '尚不可用'],
   ]
   return (
     <div className="onboarding">
@@ -462,14 +459,15 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
             <span className="active" />
             <span className={step > 0 ? 'active' : ''} />
             <span className={step > 1 ? 'active' : ''} />
+            <span className={step > 2 ? 'active' : ''} />
           </div>
-          <span>第 {step + 1} 步，共 3 步</span>
+          <span>第 {step + 1} 步，共 4 步</span>
         </div>
         {step === 0 ? (
           <>
-            <h1>少打字，<br />多表达。</h1>
+            <h1>少打字，<br />多说话。</h1>
             <p>
-              欢迎使用 OpenType。用声音完成听写、翻译和文字改写，专注于您的想法。
+              说出来，OpenType 帮你写成文字。
             </p>
             <div className="onb-actions">
               <button className="primary large" onClick={() => setStep(1)}>
@@ -479,9 +477,9 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
           </>
         ) : step === 1 ? (
           <>
-            <h1>为您的声音做好准备</h1>
-            <p>{api.platform === 'darwin' ? '麦克风用于录音，输入监控用于全局快捷键，辅助功能用于文字输入。'
-              : '开启麦克风访问后即可录音。快捷键在当前桌面监听；以管理员权限运行的应用需要手动粘贴。'}</p>
+            <h1>打开权限</h1>
+            <p>{api.platform === 'darwin' ? '开启下面三项权限，快捷键和输入才能正常工作。'
+              : '允许麦克风访问后即可开始。'}</p>
             <div className="onboarding-permissions">
               {perms.map(([icon, title, desc, ok, yes, no]) => (
                 <div className={`perm-item ${ok ? 'ok' : ''}`} key={icon}>
@@ -504,13 +502,19 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
               </button>
               <button className="ghost" onClick={() => setStep(0)}>上一步</button>
             </div>
-            <p className="muted">您也可以稍后在系统设置中授权。</p>
+            <p className="muted">也可以稍后再授权。</p>
+          </>
+        ) : step === 2 ? (
+          <>
+            <h1>选择识别方式</h1>
+            <p>之后可以在设置里随时更改。</p>
+            <SpeechSettings embedded onDone={() => setStep(3)} onBack={() => setStep(1)} />
           </>
         ) : (
           <>
-            <h1>准备好您的第一句口述</h1>
+            <h1>说第一句话试试</h1>
             <p>
-              在目标应用的输入框中，用 <kbd>{shortcut('dictationMode')}</kbd> 开始听写，按所选录音方式结束；Esc 取消。
+              点进任意输入框，按 <kbd>{shortcut('dictationMode')}</kbd> 开始说话，再按一次结束，Esc 取消。
             </p>
             <div className="onboarding-tips">
               {[
@@ -530,11 +534,8 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
               <button className="primary large" onClick={complete}>
                 进入 OpenType <Icon name="arrow" />
               </button>
-              <button className="ghost" onClick={() => setStep(1)}>上一步</button>
+              <button className="ghost" onClick={() => setStep(2)}>上一步</button>
             </div>
-            <p className="muted">
-              进入“听写模型”配置 SiliconFlow 密钥，或选择本地模型。云端识别会上传录音；翻译和文字整理需另配 DeepSeek。
-            </p>
           </>
         )}
         {error && (
@@ -547,17 +548,27 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
         {step === 0 ? (
           <div className="onb-demo">
             <div className="onb-bubble raw">嗯…那个，明天下午三点，呃，不对，四点半开会，会议室还是 3B</div>
-            <div className="onb-capsule"><span className="cap-x"><Icon name="close" size={12} /></span><span className="bars">{Array.from({ length: 13 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.08}s` }} />)}</span><span className="cap-stop"><b /></span></div>
+            <div className="onb-capsule"><span className="cap-x"><Icon name="close" size={13} /></span><span className="bars">{Array.from({ length: 13 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.08}s` }} />)}</span><span className="cap-stop"><Icon name="check" size={13} /></span></div>
             <div className="onb-bubble clean"><small>OpenType 整理后</small>明天下午四点半开会，会议室还是 3B。</div>
           </div>
         ) : step === 1 ? (
           <div className="onb-demo">
             <div className="onb-shield"><Icon name="lock" size={34} /></div>
-            <h3>由您选择识别方式</h3>
+            <h3>只用来听写</h3>
             <ul>
-              <li>云端上传录音识别，本地模型可离线</li>
-              <li>文字整理可选，启用后会发送识别文字</li>
-              <li>历史和词典默认只保存在本机</li>
+              <li>麦克风：录下你说的话</li>
+              <li>{api.platform === 'darwin' ? '输入监控' : '键盘监听'}：在任何应用里响应快捷键</li>
+              <li>{api.platform === 'darwin' ? '辅助功能' : '输入环境'}：把文字写进输入框</li>
+            </ul>
+          </div>
+        ) : step === 2 ? (
+          <div className="onb-demo">
+            <div className="onb-shield"><Icon name="cloud" size={34} /></div>
+            <h3>云端还是本地</h3>
+            <ul>
+              <li>云端：不用下载，录音会上传</li>
+              <li>本地：录音不离开电脑，可离线</li>
+              <li>文字整理会把识别出的文字发给 DeepSeek</li>
             </ul>
           </div>
         ) : (
@@ -566,12 +577,12 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
               {([['听写', 'dictationMode', 'dict'], ['翻译', 'translationMode', 'trans'], ['随便问', 'askAnythingMode', 'ask']] as const).map(([label, key, tone]) => (
                 <div className="onb-mode" key={key}>
                   <span className="onb-mode-keys">{shortcut(key).split(' + ').map((k) => <kbd key={k} className={`keycap ${tone === 'dict' ? '' : tone}`}>{k}</kbd>)}</span>
-                  <div className={`onb-capsule ${tone}`}><span className="cap-x"><Icon name="close" size={12} /></span><span className="bars">{Array.from({ length: 11 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.08}s` }} />)}</span><span className="cap-stop"><b /></span></div>
+                  <div className={`onb-capsule ${tone}`}><span className="cap-x"><Icon name="close" size={13} /></span><span className="bars">{Array.from({ length: 11 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.08}s` }} />)}</span><span className="cap-stop"><Icon name="check" size={13} /></span></div>
                   <span className="onb-mode-label">{label}</span>
                 </div>
               ))}
             </div>
-            <p className="onb-hint">三种模式用颜色区分：白色听写，蓝色翻译，绿色随便问</p>
+            <p className="onb-hint">胶囊颜色对应模式：白色听写，蓝色翻译，绿色随便问</p>
           </div>
         )}
       </aside>
@@ -590,7 +601,7 @@ class ErrorBoundary extends Component<
     return this.state.error ? (
       <div className="fatal-error">
         <h1>界面遇到问题</h1>
-        <p>您的本地记录仍保存在设备上。</p>
+        <p>记录都还在，重新打开就好。</p>
         <button onClick={() => location.reload()}>重新打开</button>
       </div>
     ) : (

@@ -36,10 +36,10 @@ export function AudioStorageDialog({ onClose, notify }: { onClose: () => void; n
     stop();setBusy(true);setError('');setConfirm(null)
     try {
       const r = await api.act(snapshot.token,selected,action)
-      const summary = action === 'recycle' ? `已将 ${r.completed} 个文件移入回收站，${bytes(r.bytes)}。清空回收站后才释放空间。`
+      const summary = action === 'recycle' ? `已将 ${r.completed} 个文件移入回收站，${bytes(r.bytes)}。`
         : action === 'erase' ? `已永久删除 ${r.completed} 个文件，文件总大小 ${bytes(r.bytes)}。`
-        : action === 'restore' ? `已将 ${r.completed} 个文件还原到原位置，原文件重新受近期文件保护。`
-        : `已将 ${r.completed} 份录音找回到历史，可播放、导出或重新识别。`
+        : action === 'restore' ? `已将 ${r.completed} 个文件还原。`
+        : `已将 ${r.completed} 份录音找回到历史。`
       setResult(summary);notify(summary)
       await scan()
       if (r.failed.length) setError(r.failed.map(f=>`${f.name}：${errorMessage(f.detail)}`).join('\n'))
@@ -47,15 +47,15 @@ export function AudioStorageDialog({ onClose, notify }: { onClose: () => void; n
   }
   return <><Modal title="录音存储管理" onClose={() => { if (!busy) onClose() }}>
     <div className="dialog-body audio-storage">
-      <p>扫描此设备上超过 24 小时、没有对应历史的录音。可先试听并找回到历史；移入回收站后仍可找回，永久删除后无法恢复。</p>
-      <p className="muted">不会自动清空回收站。移入回收站不释放磁盘空间；新文件、正在写入的文件、有历史归属或已排队删除的录音不列入候选。</p>
+      <p>这些录音没有对应的历史记录，可以找回或清理。</p>
+      
       <div className="list-toolbar"><div className="tabs">
         <button disabled={busy} className={tab==='candidates'?'active':''} onClick={()=>{stop();setTab('candidates');setSelected([]);setConfirm(null)}}>待核对录音（{snapshot?.candidates.length ?? 0}）</button>
         <button disabled={busy} className={tab==='recycled'?'active':''} onClick={()=>{stop();setTab('recycled');setSelected([]);setConfirm(null)}}>录音回收站（{snapshot?.recycled.length ?? 0}）</button>
       </div><button disabled={busy} onClick={()=>void scan()}>重新扫描</button></div>
-      {snapshot && <p className="muted">已保留 {snapshot.protectedFiles} 个有归属文件、{snapshot.recentFiles} 个近期文件；{snapshot.unknownFiles} 个其他文件未处理。</p>}
-      {snapshot?.truncated && <p className="warning">本次每类最多显示 200 个文件；处理后重新扫描可查看其余文件。</p>}
-      {!!snapshot?.unresolvedItems && <p className="warning">{snapshot.unresolvedItems} 项先前操作暂时无法核对，文件已保留。请检查磁盘权限或目录冲突，再重新扫描。</p>}
+      
+      {snapshot?.truncated && <p className="warning">只显示前 200 个，处理后重新扫描查看其余。</p>}
+      {!!snapshot?.unresolvedItems && <p className="warning">{snapshot.unresolvedItems} 项操作没有完成，文件已保留。</p>}
       {!snapshot && busy ? <p>正在扫描…</p> : items.length === 0 ? <p>{tab==='candidates'?'没有可清理的旧孤立录音。':'录音回收站为空。'}</p> : <>
         <label className="storage-select"><input type="checkbox" aria-label="选择当前列表" disabled={busy} checked={items.length>0 && selected.length===items.length} onChange={e=>setSelected(e.target.checked?items.map(f=>f.key):[])} />选择当前列表</label>
         <div className="storage-files">{items.map(file=><div className="storage-file" key={file.key}>
@@ -64,7 +64,7 @@ export function AudioStorageDialog({ onClose, notify }: { onClose: () => void; n
         </div>)}</div>
       </>}
       {audio && <div className="storage-player"><span>{playing}</span><audio controls src={audio} aria-label="试听待核对录音" /></div>}
-      <p>已选 {chosen.length} 个文件，共 {bytes(size)}。</p>
+      <p className="storage-summary">已选 {chosen.length} 个，共 {bytes(size)}</p>
       <div className="dialog-actions">
         <button disabled={busy||!chosen.length} onClick={()=>void act('recover')}>找回到历史</button>
         {tab==='recycled' && <button disabled={busy||!chosen.length} onClick={()=>void act('restore')}>仅还原文件</button>}
