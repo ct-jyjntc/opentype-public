@@ -6,9 +6,11 @@
 
 当前产品专注语音输入：SiliconFlow 云端及可选本地 SenseVoice Small、自然停顿提前识别、不限总录音时长、Skills、历史、语音词典及安全文字写入。拼音输入组件和本地 Whisper 已移除。新安装默认云端；升级保留已有本地选择。云端语音与可选文字整理使用独立密钥，在“设置 → 听写模型”由用户配置。应用标识及用户数据迁移规则保持不变。
 
+账户后端统一为 `https://api.opentype.top`，客户端登录、注册、令牌刷新、历史与词典同步均使用此地址；不再允许通过账户页面或配置 IPC 更改它。旧空地址或自定义服务的会话不会迁移到官方域名，原有本机历史和词典保留。此固定地址不影响用户的 SiliconFlow 与文字整理密钥。DNS 代理开启不等于源站已部署，发布前需要单独核实官方域名上的真实注册、登录和同步行为。
+
 - 开发与构建见 [README](README.md)。
 - 密钥配置、泄露处理与提交前检查见 [SECURITY](SECURITY.md)。
-- 最近版本行为与已知验收范围见 [beta.23 版本说明](docs/releases/0.2.0-beta.23.md) 和 [真人复测清单](docs/testing/OpenType-0.2.0-beta.23-真人复测.md)。
+- 最近版本行为与已知验收范围见 [beta.24 版本说明](docs/releases/0.2.0-beta.24.md) 和 [真人复测清单](docs/testing/OpenType-0.2.0-beta.24-真人复测.md)。
 - `docs/releases`、`docs/reviews`、`docs/testing` 中较早内容为历史记录，不代表当前功能；其中引用的旧提交、内部运行报告和安装包不随公开快照提供。
 
 不要将真实 API Key、JWT 签名密钥、邮件服务凭据、用户 profile、录音或云端部署数据写入文档、测试 fixture 或源码。

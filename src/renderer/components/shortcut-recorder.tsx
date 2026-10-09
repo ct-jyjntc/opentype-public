@@ -44,7 +44,7 @@ export function ShortcutRecorder({ current, onSave, onClose }: {
         <kbd>{value ? shortcutLabel(value) : '请按下新的快捷键'}</kbd>
         <span>{listening ? '正在监听按键，听写快捷键已暂停' : '点击此处重新录入'}</span>
       </button>
-      <p className="muted">{window.opentype.platform === 'darwin' ? '直接按右 Command、Fn、F8 或组合键即可录入。' : '直接按右 Ctrl、F8 或组合键即可录入。'}再次按键可替换；Esc 取消。</p>
+      <p className="muted">{window.opentype.platform === 'darwin' ? '按下想用的键或组合键。' : '按下想用的键或组合键。'}再次按键可替换；Esc 取消。</p>
       {error && <p role="alert" className="inline-error">{error}</p>}
       <div className="dialog-actions">
         <button type="button" onClick={onClose}>取消</button>

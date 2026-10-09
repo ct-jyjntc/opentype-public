@@ -74,7 +74,6 @@ function Card() {
         <label className="field">自定义要求<textarea rows={2} maxLength={8000} placeholder="例如：改成一封简短的中文邮件" value={instruction} disabled={working} onChange={e=>setInstruction(e.target.value)} /></label>
         <button disabled={working||!instruction.trim()} onClick={()=>void action('custom')}>按要求处理</button>
         {working&&<><p className="muted">正在生成 · 完成后可选择替换原文</p><button onClick={()=>void window.opentype.desktop.selection.cancel(payload.id!).catch(e=>setError(errorMessage(e)))}>取消处理</button><Markdown text={payload.selectionActions.preview??''}/></>}
-        {!working&&<p className="muted">需要已配置的 DeepSeek 服务。翻译使用设置中的目标语言。</p>}
       </div> : <div className="answer-text">{payload?.text ? <Markdown text={payload.text} /> : '等待回答…'}</div>}
       {(error || payload?.detail) && <p className="answer-status" role="status">{error || errorMessage(payload?.detail)}</p>}
       {(payload?.contextNotice || payload?.canReplaceSelection) && <p className="answer-status muted">

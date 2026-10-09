@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardMonitorStatus, Preferences, SettingsTab } from '../../shared/desktop'
 import { errorMessage } from '../../shared/desktop'
-import { serviceEndpoint } from '../../shared/network-policy'
 import { COMMON_WRITING_APPS, EXPRESSIONS, type ExpressionStyle, type WritingApp } from '../../shared/output-preferences'
 import { Icon, Modal, Row, Toggle } from '../components/ui'
 import { ShortcutRecorder } from '../components/shortcut-recorder'
@@ -116,7 +115,7 @@ function General({
     <>
       <h3 className="section-heading">快捷键</h3>
       <KeyboardStatus notify={notify} />
-      <Row title="录音方式" description="长按时，看到录音胶囊后开始说话；Esc 随时取消。">
+      <Row title="录音方式" >
         <select aria-label="录音方式" value={p.recordingActivation}
           onChange={e => void save({ recordingActivation: e.target.value as Preferences['recordingActivation'] })}>
           <option value="auto">短按或长按</option>
@@ -125,11 +124,11 @@ function General({
         </select>
       </Row>
       {[
-        ['dictationMode', '语音输入', '可设置最多三组快捷键，使用相同的录音方式。'],
-        ['translationMode', '翻译', '使用快捷键开始翻译。'],
-        ['askAnythingMode', '随便问', '使用快捷键提问或编辑选中文字。'],
-        ['pasteLastTranscript', '粘贴上一条听写', '将最近完成的听写粘贴到当前输入框，不重新识别；可移除全部绑定以关闭快捷键。'],
-        ['selectionActions', '选中文字快捷操作', '选中文字后打开摘要、改写、翻译、校对或 Skill 面板；也可从托盘打开。'],
+        ['dictationMode', '语音输入', ''],
+        ['translationMode', '翻译', ''],
+        ['askAnythingMode', '随便问', ''],
+        ['pasteLastTranscript', '粘贴上一条听写', '再粘贴一次上一条结果'],
+        ['selectionActions', '选中文字快捷操作', '对选中的文字摘要、改写、翻译或校对'],
       ].map(([id, title, desc]) => (
         <Row key={id} title={title} description={desc}>
           <div className="shortcut-alternatives">
@@ -194,7 +193,7 @@ function General({
       <h3 className="section-heading">音频</h3>
       <Row
         title="麦克风"
-        description="选择您首选的麦克风。未授权时设备名称可能不可见。"
+        
       >
         <select
           aria-label="麦克风"
@@ -212,21 +211,21 @@ function General({
             ))}
         </select>
       </Row>
-      <Row title="录音提示音" description="麦克风打开后和停止后播放简短声音，取消也会提示。">
+      <Row title="录音提示音" >
         <Toggle label="录音提示音" checked={p.interactionSounds} onChange={interactionSounds=>void save({interactionSounds})}/>
       </Row>
       <OutputAudioSettings value={p.outputAudio} save={save} />
-      {p.outputAudio==='mute'&&p.interactionSounds&&<p className="muted">外放静音期间也听不到录音提示音，可选择降低音量。</p>}
+      {p.outputAudio==='mute'&&p.interactionSounds&&<p className="muted">外放静音时也听不到提示音。</p>}
       {([
-        ['echoCancellation','回声消除','减少扬声器播放内容进入麦克风；具体支持取决于设备。'],
-        ['noiseSuppression','环境降噪','使用系统音频处理减少背景噪声。'],
-        ['autoGainControl','自动增益','自动调整输入音量；专业音频设备可关闭。'],
+        ['echoCancellation','回声消除',''],
+        ['noiseSuppression','环境降噪',''],
+        ['autoGainControl','自动增益',''],
       ] as const).map(([key,title,description])=><Row title={title} description={description} key={key}>
         <Toggle label={title} checked={p.audioProcessing[key]} onChange={value=>void save({audioProcessing:{...p.audioProcessing,[key]:value}})}/>
       </Row>)}
-      <p className="muted">音频处理设置在下一次录音生效。设备断开时自动停止并处理已经收到的内容。</p>
+      
       <h3 className="section-heading">常规</h3>
-      <Row title="浮窗位置" description="顶部和底部跟随当前输入窗口所在屏幕；拖动浮窗可记住位置。">
+      <Row title="浮窗位置" >
         <select aria-label="浮窗位置" value={p.floatingBar.placement} onChange={e=>void save({floatingBar:{...p.floatingBar,placement:e.target.value as Preferences['floatingBar']['placement']}})}>
           <option value="bottom">当前屏幕底部</option><option value="top">当前屏幕顶部</option><option value="remember">记住拖动位置</option>
         </select>
@@ -304,7 +303,7 @@ function OutputAudioSettings({ value, save }: { value: Preferences['outputAudio'
     restoring: '正在恢复外放音量', pending: '外放音量尚未完全恢复', error: '外放音量操作未完成',
   }
   return <>
-    <Row title="录音时的外放音量" description={supported ? '减少播放声音干扰。停止录音后恢复；录音中手动调音量时优先保留您的调整。设置从下一次录音生效。' : '此平台暂不支持自动调节外放音量。'}>
+    <Row title="录音时的外放音量" description={supported ? '' : '此平台暂不支持自动调节外放音量。'}>
       <select aria-label="录音时的外放音量" disabled={!supported} value={value} onChange={e => void save({ outputAudio: e.target.value as Preferences['outputAudio'] })}>
         <option value="off">保持原音量</option><option value="duck">降到原音量的 20%</option><option value="mute">静音外放</option>
       </select>
@@ -315,7 +314,7 @@ function OutputAudioSettings({ value, save }: { value: Preferences['outputAudio'
         <button disabled={busy || status.recording} onClick={() => void retry()}>{busy ? '正在重试…' : '重试恢复音量'}</button>
         {status.recording && <p className="muted">结束录音后可重试恢复。</p>}
       </>}
-      {api.platform === 'win32' && <p className="muted">调节系统默认播放和通信设备；单独指定到其他设备的应用不受此设置影响。</p>}
+      {api.platform === 'win32' && <p className="muted">只调节系统默认的播放设备。</p>}
     </div>}
     {error && <p role="alert">{error}</p>}
   </>
@@ -334,11 +333,11 @@ function KeyboardStatus({ notify }: { notify: (s: string) => void }) {
   }, [])
   const ready = status?.active && status.callbackRegistered && status.inputMonitoring
   return <Row tone={!status ? undefined : ready ? 'ok' : 'warn'} title={ready ? '全局快捷键监听已就绪' : '全局快捷键尚未就绪'} description={
-    !status ? '正在检查系统监听状态…' : !status.inputMonitoring
-      ? api.platform === 'darwin' ? '请在系统设置 → 隐私与安全性 → 输入监控中启用 OpenType，返回后会自动重试。'
-        : '当前系统桌面无法监听键盘；请解锁或退出系统安全提示后重新连接。'
-      : ready ? '键盘监听正常。单独的修饰键会先判断是否组成其他快捷键。'
-        : '系统监听已暂停，请点击重新连接。'
+    !status ? '正在检查…' : !status.inputMonitoring
+      ? api.platform === 'darwin' ? '请在系统设置的「输入监控」里打开 OpenType'
+        : '解锁屏幕或关掉安全提示后重新连接'
+      : ready ? ''
+        : '监听已暂停'
   }>
     <div className="inline">
       {status && !status.inputMonitoring && api.platform === 'darwin' && <button onClick={() => void api.desktop.openUrl(
@@ -374,21 +373,21 @@ function Personal({
   }
   return (
     <>
-      <Row title="从历史修改生成纠词建议" description="只在本机分析您主动保存的普通听写修改，确认后才加入词典。关闭后暂停生成新建议，已确认词条仍保留。">
+      <Row title="从历史修改生成纠词建议" description="你在历史里改过的词，会提示加入词典">
         <Toggle label="从历史修改生成纠词建议" checked={p.learnFromEdits} onChange={v => void save({ learnFromEdits: v })} />
       </Row>
-      <Row title="从输入框修改生成纠词建议" description="听写插入成功后，在原输入框检测最多一分钟。仅将本次插入内容的错词修改保存为本机待审核建议；不改历史、不自动入词典。检测时会读取原输入框核对范围，切换目标、修改范围外文字或开始新录音即停止。">
+      <Row title="从输入框修改生成纠词建议" description="听写后一分钟内你在输入框里改的词，会提示加入词典">
         <Toggle label="从输入框修改生成纠词建议" checked={p.learnFromInputEdits} onChange={v => void save({ learnFromInputEdits: v })} />
       </Row>
       <h2>听写输出格式</h2>
-      <p className="muted">在本机处理，离线也生效。仅用于普通听写，不改变翻译和语音指令的结果。</p>
-      <Row title="中文标点" description="将中文相邻的逗号、句号等改为全角；代码和地址尽量保持原样。">
+      
+      <Row title="中文标点" >
         <select aria-label="中文标点" value={p.outputPreferences.punctuation}
           onChange={e => void save({ outputPreferences: { ...p.outputPreferences, punctuation: e.target.value as 'preserve' | 'chinese' } })}>
           <option value="preserve">保持结果</option><option value="chinese">使用中文标点</option>
         </select>
       </Row>
-      <Row title="中英文与数字间距" description="只调整中文与英文、数字交界的空格，保留换行。">
+      <Row title="中英文与数字间距" >
         <select aria-label="中英文与数字间距" value={p.outputPreferences.spacing}
           onChange={e => void save({ outputPreferences: { ...p.outputPreferences, spacing: e.target.value as 'preserve' | 'space' | 'compact' } })}>
           <option value="preserve">保持结果</option><option value="space">加一个空格</option><option value="compact">不加空格</option>
@@ -396,7 +395,7 @@ function Personal({
       </Row>
       <Row
         title="启用语气与写作偏好"
-        description="需要开启 DeepSeek 文字整理并配置密钥；离线时保留原语气。"
+        description="需要开启文字整理"
       >
         <Toggle
           label="启用语气与写作偏好"
@@ -404,7 +403,7 @@ function Personal({
           onChange={(v) => void save({ usePersonalStyle: v })}
         />
       </Row>
-      <Row title="默认表达方式" description="用于没有单独规则的应用；仅普通听写采用此偏好。">
+      <Row title="默认表达方式" >
         <select aria-label="默认表达方式" disabled={!p.usePersonalStyle} value={p.outputPreferences.expression}
           onChange={e => void save({ outputPreferences: { ...p.outputPreferences, expression: e.target.value as ExpressionStyle } })}>
           {EXPRESSIONS.map(([key, label]) => <option value={key} key={key}>{label}</option>)}
@@ -412,7 +411,7 @@ function Personal({
       </Row>
       <div className="app-expression-card">
         <h2>按应用选择表达方式</h2>
-        <p className="muted">例如微信用自然口语，邮件用正式表达。按开始录音时的应用匹配；历史重试使用原目标应用和当前偏好。</p>
+        <p className="muted">比如微信用口语，邮件用正式表达。</p>
         <div className="app-expression-controls">
           <label className="field">应用<select aria-label="应用表达规则的应用" value={selectedApp} onChange={e => setSelectedApp(e.target.value)}>
             {apps.map(a => <option key={a.bundleId} value={a.bundleId}>{a.appName}</option>)}
@@ -422,16 +421,15 @@ function Personal({
           </select></label>
           <button disabled={savingRule || (!p.appExpressions.some(a => a.bundleId === selectedApp) && p.appExpressions.length >= 50)} onClick={() => void updateRule()}>保存应用规则</button>
         </div>
-        {p.appExpressions.length === 0 && <p className="muted">尚无单独规则，所有应用使用默认表达方式。</p>}
         {p.appExpressions.map(rule => <Row key={rule.bundleId} title={rule.appName} description={EXPRESSIONS.find(([key]) => key === rule.expression)?.[1]}>
           <button aria-label={`移除${rule.appName}的表达规则`} onClick={() => void save({ appExpressions: p.appExpressions.filter(a => a.bundleId !== rule.bundleId) })}>恢复默认</button>
         </Row>)}
-        <p className="muted">其他应用完成一次听写后会出现在列表中。最多保存 50 条；浏览器按整个应用设置，不区分网站。</p>
+        
       </div>
       <div className="personal-card">
         <Icon name="spark" size={32} />
         <h2>让文字更像您</h2>
-        <p>填写额外的写作偏好。上方的表达方式优先决定语气，词典中的名称作为整理参考。</p>
+        <p>告诉它你习惯怎么写。</p>
         <label className="field">
           写作偏好
           <textarea
@@ -448,9 +446,6 @@ function Personal({
         >
           保存偏好
         </button>
-        <p className="muted">
-          识别原文保留在历史详情中。写作偏好由您明确设置；输入框纠词检测使用上方独立开关，仅生成待审核建议。
-        </p>
       </div>
     </>
   )
@@ -463,9 +458,9 @@ function Account({ notify }: { notify: (s: string) => void }) {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [sync, setSync] = useState<any>(null),
-    [server, setServer] = useState(''),
-    [savedServer, setSavedServer] = useState(''),
+    [accountLoaded, setAccountLoaded] = useState(false),
     [phase, setPhase] = useState('')
+  const authPending = useRef(false)
   const [pendingDeletions, setPendingDeletions] = useState(0)
   const [cloudExcluded, setCloudExcluded] = useState(0), [pendingCloudWipe, setPendingCloudWipe] = useState(false)
   const [confirmWipe, setConfirmWipe] = useState(false), [confirmRetention, setConfirmRetention] = useState<number | null>(null)
@@ -479,16 +474,19 @@ function Account({ notify }: { notify: (s: string) => void }) {
     const status = await api.sync.status()
     setSync(status)
     await refreshLocal()
-    if (!status) throw new Error('暂时无法连接同步服务，请稍后刷新状态')
+    if (!status) throw new Error('连不上同步服务')
   }
-  let serverError = ''
-  try { serviceEndpoint(savedServer) } catch (e) { serverError = errorMessage(e) }
+  const loadAccount = async () => {
+    setError('')
+    try { setLogged(await api.auth.isLoggedIn()); setAccountLoaded(true) }
+    catch (e) { setError(errorMessage(e)) }
+  }
   useEffect(() => {
     void api.sync.localStatus().then(s => { setPendingDeletions(s.pendingDeletions); setCloudExcluded(s.cloudExcluded ?? 0); setPendingCloudWipe(s.pendingCloudWipe === true) })
+      .catch((e) => setError(errorMessage(e)))
   }, [logged, phase])
   useEffect(() => {
-    void api.auth.isLoggedIn().then(setLogged)
-    void api.config.get().then((c) => { setServer(c.cloudBaseUrl); setSavedServer(c.cloudBaseUrl) })
+    void loadAccount()
     return api.sync.onState((s) => {
       setPhase(s.phase)
       if (s.phase === 'error') setError(errorMessage(s.detail))
@@ -496,10 +494,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
   }, [])
   useEffect(() => {
     if (logged)
-      void api.sync
-        .status()
-        .then(async (status) => { setSync(status); await refreshLocal() })
-        .catch((e) => setError(errorMessage(e)))
+      void refreshSync().catch((e) => setError(errorMessage(e)))
     else setSync(null)
   }, [logged])
   const syncSave = async (p: {
@@ -530,27 +525,28 @@ function Account({ notify }: { notify: (s: string) => void }) {
         <div className="avatar">
           <Icon name="user" size={28} />
         </div>
-        <h2>{logged ? '已登录' : '本地账户'}</h2>
-        <p>听写、历史和词典无需登录 OpenType 账户；云端识别需单独配置 SiliconFlow 密钥。登录后可分别选择同步历史和账号词典，词库同步在“词典”页开启。</p>
-        {serverError && <p className="muted">{serverError}</p>}
+        <h2>{logged ? '已登录' : 'OpenType 账户'}</h2>
+        <p>不登录也能听写。登录后可通过 OpenType 官方服务同步历史和词典。</p>
       </div>
-      {!logged ? (
+      {!accountLoaded ? <p role="status">{error ? <button onClick={() => void loadAccount()}>重新读取账户状态</button> : '正在读取账户状态…'}</p> : !logged ? (
         <form
           onSubmit={async (e) => {
             e.preventDefault()
+            if (authPending.current || busy || !accountLoaded) return
+            authPending.current = true
             setBusy(true)
             setError('')
             try {
-              if (serverError) throw new Error(serverError)
               const r = await (register
-                ? api.auth.register({ email, password })
-                : api.auth.loginWithPassword({ email, password }))
-              if (!r.success) throw new Error(r.detail)
+                ? api.auth.register({ email: email.trim(), password })
+                : api.auth.loginWithPassword({ email: email.trim(), password }))
+              if (!r.success) throw new Error(r.detail || '暂时无法登录，请重试')
               setLogged(true)
               setPassword('')
             } catch (e) {
               setError(errorMessage(e))
             } finally {
+              authPending.current = false
               setBusy(false)
             }
           }}
@@ -560,6 +556,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
             <input
               type="email"
               value={email}
+              disabled={busy}
               required
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="username"
@@ -570,6 +567,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
             <input
               type="password"
               value={password}
+              disabled={busy}
               minLength={register ? 8 : undefined}
               required
               onChange={(e) => setPassword(e.target.value)}
@@ -579,6 +577,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
           <div className="dialog-actions">
             <button
               type="button"
+              disabled={busy}
               onClick={() => {
                 setRegister(!register)
                 setError('')
@@ -586,7 +585,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
             >
               {register ? '已有账户，去登录' : '注册账户'}
             </button>
-            <button className="primary" disabled={busy || !!serverError}>
+            <button className="primary" disabled={busy}>
               {busy ? '处理中…' : register ? '注册并登录' : '登录'}
             </button>
           </div>
@@ -595,16 +594,16 @@ function Account({ notify }: { notify: (s: string) => void }) {
         <>
           <Row
             title="云端同步"
-            description="打开后，历史文字将上传至已配置的 OpenType 服务。"
+            description="开启后，历史文字会上传到 OpenType；录音不参与同步。词典同步在词典页单独开启。"
           >
             <Toggle
               label="云端同步"
-              disabled={busy || phase === 'clearing_cloud'}
+              disabled={busy || !sync || phase === 'clearing_cloud'}
               checked={!!sync?.sync_enabled}
               onChange={(v) => void syncSave({ sync_enabled: v })}
             />
           </Row>
-          <Row title="云端保留时间" description="按首次上传到服务器的时间计算，更新文字不会延长。到期仅移除云端副本，本机历史与录音保留。">
+          <Row title="云端保留时间" description="到期只删云端副本，本机不受影响。">
             <select
               aria-label="云端保留时间"
               value={sync?.cloud_retention ?? -1}
@@ -621,7 +620,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
               <option value={7}>7 天</option>
             </select>
           </Row>
-          {sync && <p className="muted">云端现有 {sync.total ?? 0} 条历史。{sync.cloud_lifecycle_version !== 1 && '当前服务尚未支持可靠的云端清空与保留期，请先升级服务端。'}</p>}
+          {sync && <p className="muted">云端现有 {sync.total ?? 0} 条历史。{sync.cloud_lifecycle_version !== 1 && '云端保留和清空暂不可用，请稍后重试。'}</p>}
           <div className="dialog-actions">
             <button disabled={busy || phase === 'clearing_cloud'} onClick={async () => {
               setBusy(true); setError('')
@@ -646,14 +645,18 @@ function Account({ notify }: { notify: (s: string) => void }) {
               onClick={() => setConfirmWipe(true)}>{pendingCloudWipe ? '确认上次清空结果' : '清空云端历史'}</button>
             <button
               disabled={busy}
-              onClick={() =>
-                void api.auth.logout().then(() => setLogged(false))
-              }
+              onClick={async () => {
+                if (authPending.current) return
+                authPending.current = true; setBusy(true); setError('')
+                try { await api.auth.logout(); setLogged(false); setPassword('') }
+                catch (e) { setError(errorMessage(e)) }
+                finally { authPending.current = false; setBusy(false) }
+              }}
             >
               退出登录
             </button>
           </div>
-          {pendingDeletions > 0 && <p className="muted">待云端确认删除：{pendingDeletions} 条。联网并开启同步后自动尝试；失败后可点击“立即同步”重试。</p>}
+          {pendingDeletions > 0 && <p className="muted">待云端确认删除：{pendingDeletions} 条，联网后自动同步。</p>}
           {cloudExcluded > 0 && <p className="muted">{cloudExcluded} 条记录因云端清空或到期仅保留在本机，不会再次自动上传。</p>}
         </>
       )}
@@ -682,34 +685,6 @@ function Account({ notify }: { notify: (s: string) => void }) {
           {error}
         </p>
       )}
-      <details className="server-settings" open={!!serverError}>
-        <summary>账号服务地址</summary>
-        <label className="field">
-          服务地址
-          <input
-            value={server}
-            onChange={(e) => setServer(e.target.value)}
-            placeholder="https://your-server.example"
-          />
-        </label>
-        <p className="muted">更改地址后需重新登录；听写模型设置不受影响。</p>
-        <button
-          onClick={() =>
-            void api.config
-              .set({ cloudBaseUrl: server })
-              .then((c) => {
-                setServer(c.cloudBaseUrl)
-                setSavedServer(c.cloudBaseUrl)
-                setError('')
-                setLogged(false)
-                notify('服务地址已保存')
-              })
-              .catch((e) => setError(errorMessage(e)))
-          }
-        >
-          保存地址
-        </button>
-      </details>
     </>
   )
 }
@@ -776,20 +751,20 @@ function About() {
 function Help() {
   const groups: [string, [string, string][]][] = [
     ['开始使用', [
-      ['如何开始听写？', '在目标应用点进输入框，使用设置中的听写快捷键开始和结束录音，Esc 取消。可在设置中选择短按切换或按住说话。'],
-      ['需要哪些权限？', api.platform === 'darwin' ? '系统设置 → 隐私与安全性中开启麦克风、输入监控和辅助功能权限。输入监控用于全局热键，辅助功能用于文字插入。'
-            : '在 Windows 隐私设置中允许桌面应用访问麦克风。请在普通桌面使用快捷键；目标应用以管理员权限运行时，可以手动复制听写结果。'],
-      ['翻译与随便问如何使用？', '使用设置中的翻译或随便问快捷键，需要先配置 DeepSeek。选中文字后可要求改写或解释，回答先显示在卡片里；可编辑选区可点击“替换选中文字”，只读正文可复制回答。'],
+      ['如何开始听写？', '点进任意输入框，按听写快捷键开始说话，再按一次结束。Esc 取消。'],
+      ['需要哪些权限？', api.platform === 'darwin' ? '麦克风、输入监控、辅助功能，在「系统设置 → 隐私与安全性」里打开。'
+            : '在 Windows 隐私设置里允许桌面应用使用麦克风。'],
+      ['翻译与随便问如何使用？', '按对应快捷键说话即可，需要先配好文字整理。选中文字再按随便问，可以让它改写或解释。'],
     ]],
     ['隐私与离线', [
-      ['录音会上传吗？', '选择 SiliconFlow 云端识别时，录音会分段上传到 SiliconFlow。选择本地识别时，音频在本机处理；如果开启云端文字整理，识别文字和允许的文字上下文仍会发送到整理服务。'],
-      ['离线可以使用吗？', '在“听写模型”选择本地识别、准备 SenseVoice Small 模型并保存，关闭云端整理，即可离线听写。录音不设最短或最长时长；说话时利用停顿提前识别，结束后补齐剩余内容并输出全文。'],
+      ['录音会上传吗？', '云端识别会把录音上传到 SiliconFlow；本地识别时录音不离开电脑。开启文字整理后，识别文字与允许的文字上下文会发送到整理服务。'],
+      ['离线可以使用吗？', '在「听写模型」选本地识别并下载模型，再关掉文字整理。'],
     ]],
     ['遇到问题', [
-      ['失败后怎样找回内容？', '历史记录中打开这条口述，可播放、导出录音，查看原文，或重新识别。'],
+      ['失败后怎样找回内容？', '在历史记录里打开那一条，可以重放录音或重新识别。'],
     ]],
     ['开发者', [
-      ['怎样修改这个界面？', '界面位于 src/renderer，使用 React、TypeScript 和 CSS；执行 npm run build 后启动即可。'],
+      ['怎样修改这个界面？', '界面代码在 src/renderer，改完 npm run build。'],
     ]],
   ]
   return (

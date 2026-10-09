@@ -14,7 +14,8 @@
 // 部署：单文件，零依赖，scp 上去 + systemd 即可。
 
 import { createServer } from 'node:http'
-import { initDb } from './db/index.ts'
+import { initDb, closeDb } from './db/index.ts'
+import { createHash } from 'node:crypto'
 import {
   initSigningKey, registerUser, authenticate, getUserById, getUserByEmail, issueTokens, refreshTokens,
   revokeRefreshToken, createAuthCode, exchangeAuthCode, createEmailCode, verifyEmailCode,
@@ -25,15 +26,15 @@ import {
   pushHistory, pullHistory, loadOlder, getSyncStatus, updateSyncSettings,
   wipeHistory, acknowledgeHints, getDomainBlacklist, isSyncEnabled, deleteHistory, cloudEpoch, expireCloudHistory
 } from './services/history.ts'
-import { voiceFlow, checkUpstreams } from './services/voice.ts'
-import { sendCodeMail } from './services/mail.ts'
+import { voiceFlow } from './services/voice.ts'
+import { sendCodeMail, mailConfigured, developmentEmailCodesAllowed } from './services/mail.ts'
 import { getUserSettings, mergeUserSettings, getPath } from './services/settings.ts'
 import {
   listWords, addWord, updateWord, deleteWord, batchDeleteWords, previewBulkImport, bulkImport
 } from './services/dictionary.ts'
 import {
   readJson, readMultipart, parseMultipart, sendOk, sendError, sendJson, sendHtml, sendRedirect,
-  clientIp, rateLimit, readBody
+  clientIp, rateLimit, readBody, HttpError
 } from './http.ts'
 import { renderAuthorizePage } from './services/authorize-page.ts'
 import { renderReleaseNotesPage, renderMicTroubleshootingPage } from './services/help-page.ts'
@@ -44,6 +45,14 @@ import { dictionaryStatus, pullDictionary, pushDictionary } from './services/dic
 const PORT = Number(process.env.PORT ?? 9100)
 const HOST = process.env.HOST ?? '127.0.0.1'
 const DB_PATH = process.env.DB_PATH ?? '/var/lib/opentype/opentype.db'
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error('invalid_server_port')
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32 || /^(change|replace|example)/i.test(process.env.JWT_SECRET)) {
+    throw new Error('production_requires_strong_JWT_SECRET')
+  }
+  if (process.env.ALLOW_DEV_EMAIL_CODES === 'true') throw new Error('development_email_codes_forbidden_in_production')
+}
+process.umask(0o077)
 
 // MARK: - 初始化
 
@@ -67,6 +76,8 @@ const AUTH_SKIP = new Set([
   '/oauth/refresh_access_token',
   '/oauth/exchange_app_login_code',
   '/oauth/signin_with_email',
+  '/oauth/signin_with_google',
+  '/oauth/auth_user_from_google',
   '/oauth/verify_secret_code',
   '/oauth/register',
   '/oauth/login',
@@ -107,6 +118,27 @@ type Handler = (
   res: import('node:http').ServerResponse,
   auth: AuthResult
 ) => Promise<void> | void
+
+function validatedEmail(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value.trim())) {
+    throw new HttpError(400, 'invalid_email')
+  }
+  return value.trim().toLowerCase()
+}
+
+function reserveEmailDelivery(email: string): void {
+  const identity = createHash('sha256').update(email).digest('hex')
+  if (!rateLimit(`mail-minute:${identity}`, 1, 60_000) || !rateLimit(`mail-hour:${identity}`, 5, 3600_000)) {
+    throw new HttpError(429, 'rate_limited')
+  }
+  if (!mailConfigured() && !developmentEmailCodesAllowed()) throw new HttpError(503, 'mail_not_configured')
+}
+
+async function deliverCode(email: string, code: string, purpose: 'login' | 'password_reset'): Promise<string | undefined> {
+  if (await sendCodeMail(email, code, purpose)) return undefined
+  if (developmentEmailCodesAllowed()) return code
+  throw new HttpError(503, 'mail_delivery_failed')
+}
 
 const routes: Record<string, Handler> = {
   // ===== 帮助页面 =====
@@ -156,11 +188,9 @@ const routes: Record<string, Handler> = {
 
   // ===== 健康检查 =====
   'GET /health': async (_req, res) => {
-    const upstreams = await checkUpstreams()
-    sendJson(res, 200, {      status: 'ok',
+    sendJson(res, 200, { status: 'ok',
       service: 'opentype',
-      version: '0.1.0',
-      upstreams
+      account_api: 1
     })
   },
 
@@ -175,8 +205,7 @@ const routes: Record<string, Handler> = {
    */
   'POST /oauth/signin_with_email': async (req, res) => {
     const body = await readJson<{ email: string; password?: string }>(req)
-    const email = (body.email ?? '').trim().toLowerCase()
-    if (!email) return sendError(res, 400, 'email_required', 400)
+    const email = validatedEmail(body.email)
 
     // 带密码 → 密码认证路径
     if (body.password) {
@@ -188,14 +217,13 @@ const routes: Record<string, Handler> = {
     }
 
     // 不带密码 → 发验证码
+    reserveEmailDelivery(email)
     const code = createEmailCode(email)
-    const sent = await sendCodeMail(email, code, 'login')
-    // 邮件未投递（未配置通道）且非生产环境时，把验证码返回给客户端
-    const devMode = process.env.NODE_ENV !== 'production'
+    const devCode = await deliverCode(email, code, 'login')
     sendOk(res, {
       requires_verification: true,
       email,
-      ...(devMode && !sent ? { dev_code: code } : {})
+      ...(devCode ? { dev_code: devCode } : {})
     })
   },
 
@@ -205,12 +233,11 @@ const routes: Record<string, Handler> = {
    */
   'POST /oauth/signin_with_google': async (req, res) => {
     const body = await readJson<{ email?: string }>(req)
-    if (!body.email) return sendError(res, 400, 'email_required', 400)
-    const email = body.email.trim().toLowerCase()
+    const email = validatedEmail(body.email)
+    reserveEmailDelivery(email)
     const code = createEmailCode(email)
-    const sent = await sendCodeMail(email, code, 'login')
-    const devMode = process.env.NODE_ENV !== 'production'
-    sendOk(res, { requires_verification: true, email, ...(devMode && !sent ? { dev_code: code } : {}) })
+    const devCode = await deliverCode(email, code, 'login')
+    sendOk(res, { requires_verification: true, email, ...(devCode ? { dev_code: devCode } : {}) })
   },
 
   'POST /oauth/verify_secret_code': async (req, res) => {
@@ -282,13 +309,13 @@ const routes: Record<string, Handler> = {
       return sendError(res, 429, 'rate_limited', 429)
     }
     const body = await readJson<{ email: string }>(req)
-    const email = (body.email ?? '').trim().toLowerCase()
+    const email = validatedEmail(body.email)
+    reserveEmailDelivery(email)
 
     let devCode: string | undefined
     if (email && getUserByEmail(email)) {
       const code = createPasswordResetCode(email)
-      const sent = await sendCodeMail(email, code, 'password_reset')
-      if (!sent && process.env.NODE_ENV !== 'production') devCode = code
+      devCode = await deliverCode(email, code, 'password_reset')
     }
     sendOk(res, { success: true, ...(devCode ? { dev_code: devCode } : {}) })
   },
@@ -337,12 +364,11 @@ const routes: Record<string, Handler> = {
 
   'POST /oauth/auth_user_from_google': async (req, res) => {
     const body = await readJson<{ email: string }>(req)
-    if (!body.email) return sendError(res, 400, 'email_required', 400)
-    const email = body.email.trim().toLowerCase()
+    const email = validatedEmail(body.email)
+    reserveEmailDelivery(email)
     const code = createEmailCode(email)
-    const sent = await sendCodeMail(email, code, 'login')
-    const devMode = process.env.NODE_ENV !== 'production'
-    sendOk(res, { requires_verification: true, email, ...(devMode && !sent ? { dev_code: code } : {}) })
+    const devCode = await deliverCode(email, code, 'login')
+    sendOk(res, { requires_verification: true, email, ...(devCode ? { dev_code: devCode } : {}) })
   },
 
   // ===== 授权页 =====
@@ -374,7 +400,7 @@ const routes: Record<string, Handler> = {
    * 用表单 POST 而非 fetch，因为这是浏览器页面，需要跳转语义。
    */
   'POST /login/app/auth': async (req, res) => {
-    const body = await readBody(req)
+    const body = await readBody(req, 16 * 1024)
     const form = new URLSearchParams(body.toString('utf8'))
     const email = (form.get('email') ?? '').trim().toLowerCase()
     const password = form.get('password') ?? ''
@@ -384,21 +410,20 @@ const routes: Record<string, Handler> = {
     const redirectUri = form.get('redirect_uri') ?? ''
     const mode = form.get('mode') ?? 'login'
 
-    // 诊断：记录收到的原始参数（临时）
-    console.log('[auth-page] 收到:', JSON.stringify({
-      email: email || '(空)',
-      hasPassword: password.length > 0,
-      mode,
-      hasChallenge: Boolean(codeChallenge),
-      hasState: Boolean(state)
-    }))
-
     const fail = (error: string) => sendHtml(res, 200, renderAuthorizePage({
       codeChallenge, state, next, redirectUri: redirectUri || undefined,
       register: mode === 'register', error
     }))
 
-    if (!codeChallenge || !state) return fail('授权参数缺失，请从应用重新发起登录')
+    if (!/^[A-Za-z0-9_-]{43}$/.test(codeChallenge) || !state || state.length > 128) return fail('授权参数无效，请从应用重新发起登录')
+    if (redirectUri) {
+      let callback: URL
+      try { callback = new URL(redirectUri) } catch { return fail('回调地址无效，请从应用重新发起登录') }
+      if (callback.protocol !== 'http:' || callback.hostname !== '127.0.0.1' || !callback.port
+        || callback.pathname !== '/auth/callback' || callback.username || callback.password || callback.search || callback.hash) {
+        return fail('回调地址无效，请从应用重新发起登录')
+      }
+    }
 
     // 注册或登录
     let userId: string | null = null
@@ -806,14 +831,25 @@ function findHandler(method: string, pathname: string): Handler | undefined {
   return undefined
 }
 
-const server = createServer((req, res) => {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
+const server = createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
+  let url: URL
+  try { url = new URL(req.url ?? '/', 'http://localhost') } catch { sendError(res, 400, 'invalid_url', 400); return }
   const key = `${req.method} ${url.pathname}`
   const handler = findHandler(req.method ?? 'GET', url.pathname)
 
   if (!handler) {
-    sendError(res, 404, `unknown_route: ${key}`, 404)
+    sendError(res, 404, 'unknown_route', 404)
     return
+  }
+
+  if (req.method === 'POST' && (url.pathname.startsWith('/oauth/') || url.pathname === '/login/app/auth')) {
+    const ip = clientIp(req)
+    if (!rateLimit(`auth:${ip}`, 30, 60_000)
+      || (url.pathname === '/oauth/register' && !rateLimit(`register:${ip}`, 10, 3600_000))) {
+      res.setHeader('retry-after', '60')
+      sendError(res, 429, 'rate_limited', 429)
+      return
+    }
   }
 
   const auth = authenticateRequest(url.pathname, req)
@@ -823,10 +859,14 @@ const server = createServer((req, res) => {
   }
 
   Promise.resolve(handler(req, res, auth)).catch((err) => {
-    console.error(`[error] ${key}:`, err)
-    if (!res.headersSent) sendError(res, 500, (err as Error).message, 500)
+    if (!(err instanceof HttpError)) console.error(`[error] ${key}: request_failed`)
+    if (!res.headersSent) sendError(res, err instanceof HttpError ? err.status : 500,
+      err instanceof HttpError ? err.message : 'internal_server_error')
   })
 })
+server.headersTimeout = 15_000
+server.requestTimeout = 120_000
+server.keepAliveTimeout = 5000
 
 const cleanupCloudHistory = () => {
   try { expireCloudHistory() } catch { console.warn('[opentype] cloud retention cleanup will retry') }
@@ -836,14 +876,14 @@ const cloudRetentionTimer = setInterval(cleanupCloudHistory, 60_000); cloudReten
 server.listen(PORT, HOST, () => {
   console.log(`[opentype] listening on http://${HOST}:${PORT}`)
   console.log(`[opentype] db: ${DB_PATH}`)
-  console.log(`[opentype] ASR: ${process.env.ASR_URL ?? 'http://127.0.0.1:8080'}`)
-  console.log(`[opentype] LLM: ${process.env.LLM_URL || '(未配置，润色将降级)'}`)
+  console.log(`[opentype] email delivery: ${mailConfigured() ? 'configured' : 'unavailable'}`)
 })
 
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     clearInterval(cloudRetentionTimer)
     console.log(`[opentype] ${sig} received, shutting down`)
-    server.close(() => process.exit(0))
+    server.close(() => { closeDb(); process.exit(0) })
+    setTimeout(() => { server.closeAllConnections(); closeDb(); process.exit(0) }, 10_000).unref()
   })
 }

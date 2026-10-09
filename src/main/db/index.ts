@@ -504,6 +504,12 @@ export const HistoryRepo = {
     return result.changes ?? 0
   },
 
+  /** Retain device history while preventing a server migration from uploading it. */
+  preserveLegacyCloudScope(serverUrl: string): void {
+    requireDb()
+    raw!.prepare('UPDATE history SET cloud_scope = ? WHERE cloud_scope IS NULL').run(serverUrl)
+  },
+
   /**
    * 取待同步记录。两个关键过滤：
    * 1. 同时接纳「属于该用户」与「尚未归属」的记录——后者由 claimOrphans 认领后进入同步队列。

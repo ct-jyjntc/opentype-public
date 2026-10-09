@@ -304,7 +304,7 @@ export interface SyncStatus {
 export function isSyncEnabled(userId: string): boolean {
   const settings = getDb().prepare('SELECT sync_enabled FROM sync_settings WHERE user_id = ?')
     .get(userId) as { sync_enabled: number } | undefined
-  return settings ? settings.sync_enabled === 1 : true
+  return settings ? settings.sync_enabled === 1 : false
 }
 
 export function getSyncStatus(userId: string): SyncStatus {
@@ -329,7 +329,7 @@ export function getSyncStatus(userId: string): SyncStatus {
     latest_server_updated_at: latestChange(userId),
     earliest_server_updated_at: stats.earliest,
     cloud_retention: settings?.cloud_retention ?? -1,
-    sync_enabled: settings ? settings.sync_enabled === 1 : true,
+    sync_enabled: settings ? settings.sync_enabled === 1 : false,
     purge_before_at: settings?.purge_before_at ?? null
   }
 }
@@ -354,7 +354,7 @@ export function updateSyncSettings(
     .get(userId) as { cloud_retention: number; sync_enabled: number } | undefined
 
   const retention = patch.cloud_retention ?? current?.cloud_retention ?? -1
-  const enabled = patch.sync_enabled !== undefined ? (patch.sync_enabled ? 1 : 0) : (current?.sync_enabled ?? 1)
+  const enabled = patch.sync_enabled !== undefined ? (patch.sync_enabled ? 1 : 0) : (current?.sync_enabled ?? 0)
 
   db.prepare(`
     INSERT INTO sync_settings (user_id, cloud_retention, sync_enabled, updated_at)
@@ -414,7 +414,7 @@ export function wipeHistory(userId: string, requestId: string): { deleted: numbe
     const now = Date.now(), epoch = cloudEpoch(userId) + 1
     const ids = db.prepare('SELECT id FROM history WHERE user_id = ?').all(userId) as { id: string }[]
     const deleted = evictCloudRows(userId, ids.map(r => r.id), now)
-    db.prepare(`INSERT INTO sync_settings (user_id, cloud_epoch, updated_at) VALUES (?, ?, ?)
+    db.prepare(`INSERT INTO sync_settings (user_id, cloud_epoch, updated_at, sync_enabled) VALUES (?, ?, ?, 0)
       ON CONFLICT(user_id) DO UPDATE SET cloud_epoch = excluded.cloud_epoch, updated_at = excluded.updated_at`).run(userId, epoch, now)
     db.prepare('INSERT INTO history_cloud_wipes (request_id, user_id, cloud_epoch, deleted) VALUES (?, ?, ?, ?)').run(requestId, userId, epoch, deleted)
     return { deleted, cloud_epoch: epoch }
