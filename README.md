@@ -2,7 +2,7 @@
 
 支持云端与本地识别的语音输入法。使用快捷键开始说话，再次按键结束；也可配置为按住说话。识别结果可直接写入当前输入框。
 
-公开仓库：<https://github.com/ct-jyjntc/opentype-public>。当前源码版本为 `0.2.0-beta.24`。本仓库从经过整理的源码快照开始，不迁移旧 Git 历史、私有部署资料、用户数据或旧安装包。
+公开仓库：<https://github.com/ct-jyjntc/opentype-public>。当前源码版本为 `0.2.0-beta.26`。本仓库从经过整理的源码快照开始，不迁移旧 Git 历史、私有部署资料、用户数据或旧安装包。
 
 ## 功能
 
@@ -15,7 +15,7 @@
 
 当前版本不包含拼音键盘、候选窗、Rime/IMK/TSF 或本地 Whisper。语音词典的发音提示仍保留。应用标识及数据迁移规则保持不变，升级不会主动删除旧版个人词库。
 
-登录、注册和同步使用固定的官方后端 `https://api.opentype.top`，在软件内完成账户操作，无需填写服务器地址。听写本身无需登录；历史与词典同步分别开启，录音不参与账户同步。个人 SiliconFlow 和文字整理密钥仍在听写模型设置中管理。后端实际可用性需以部署后的端到端结果为准。
+登录、注册和同步使用固定的官方后端 `https://api.opentype.top`，在软件内完成账户操作，无需填写服务器地址。登录和注册的安全验证直接嵌在应用内；`www.opentype.top` 提供官网及验证页，API 域名只提供接口。听写本身无需登录；历史与词典同步分别开启，录音不参与账户同步。个人 SiliconFlow 和文字整理密钥仍在听写模型设置中管理。后端实际可用性需以部署后的端到端结果为准。
 
 ## 开发与构建
 
@@ -32,7 +32,7 @@ npm start
 
 麦克风用于录音，辅助功能和输入监控用于全局快捷键及文字写入。按系统提示授予需要的权限；相关权限变更后可能需要重启应用。
 
-选择本地识别时，在设置页准备 SenseVoice 模型；云端识别无需下载本地模型。下载固定版本并校验 SHA-256。开发态路径为 `gateway/models/sensevoice-int8/`，安装版路径为应用数据目录中的 `models/sensevoice-int8/`。模型权重不放入 Git。出处与许可见 [SenseVoice NOTICE](build/third-party/SenseVoice-NOTICE.md)。
+选择本地识别时，在设置页点“下载并启用”；准备成功后直接启用，取消或失败保留原识别方式，其他设置草稿仍需保存。优先复用安装包中的有效模型，缺少时从官网固定版本地址下载并校验 SHA-256；云端识别无需下载本地模型。开发态路径为 `gateway/models/sensevoice-int8/`，安装版路径为应用数据目录中的 `models/sensevoice-int8/`。模型权重不放入 Git。出处与许可见 [SenseVoice NOTICE](build/third-party/SenseVoice-NOTICE.md)。
 
 ```bash
 npm run typecheck
@@ -54,7 +54,7 @@ npm run pack:beta
 
 Windows x64 原生源码和 `electron-builder.windows.cjs` 配置保留，需要 Windows SDK、MSVC、CMake 及 x64 Node/Electron。当前仓库的历史验收记录没有 Windows 编译和运行结果，不能视为可用 Windows 发布版。
 
-检查更新、发布页与构建发布配置均使用 `ct-jyjntc/opentype-public`。公开仓库尚无可用于自动更新验收的 Release；本地测试包不等于已发布的更新。旧版记录中的本机产物链接、内部运行日志和提交号仅为历史说明。
+检查更新、发布页与构建发布配置均使用 `ct-jyjntc/opentype-public`。[beta.25 测试版](https://github.com/ct-jyjntc/opentype-public/releases/tag/v0.2.0-beta.25) 已公开提供 DMG、ZIP、测试版更新元数据、校验文件与真人复测清单。beta.26 正在修复软件内检查更新；自动下载并安装更新仍需另行真人复测。旧版记录中的本机产物链接、内部运行日志和提交号仅为历史说明。
 
 ## 目录
 
@@ -70,4 +70,4 @@ Windows x64 原生源码和 `electron-builder.windows.cjs` 配置保留，需要
 
 真实凭据、部署配置、用户 profile、词库、录音、数据库、备份和日志禁止提交。使用忽略的本地环境文件，提交示例只保留空值或明确占位符；详见 [SECURITY](SECURITY.md)。
 
-当前变更与待验范围见 [beta.24 版本说明](docs/releases/0.2.0-beta.24.md) 和 [真人复测清单](docs/testing/OpenType-0.2.0-beta.24-真人复测.md)。较早文档为历史记录，可能描述已移除功能。请使用合成内容复测，并在报告中删除密钥、个人数据与部署信息。
+当前变更与待验范围见 [beta.26 版本说明](docs/releases/0.2.0-beta.26.md) 和 [真人复测清单](docs/testing/OpenType-0.2.0-beta.26-真人复测.md)。较早文档为历史记录，可能描述已移除功能。请使用合成内容复测，并在报告中删除密钥、个人数据与部署信息。

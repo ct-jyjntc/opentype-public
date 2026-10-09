@@ -20,7 +20,9 @@ class DesktopUpdater {
     return this.snapshot()
   }
   private getEngine() {
-    return this.engine ??= import('electron-updater').then(({ autoUpdater }) => {
+    return this.engine ??= import('electron-updater').then(({ default: updaterModule }) => {
+      // autoUpdater is a lazy CommonJS getter, not a Node ESM named export.
+      const { autoUpdater } = updaterModule
       autoUpdater.autoDownload = false
       autoUpdater.autoInstallOnAppQuit = false
       autoUpdater.logger = null

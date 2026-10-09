@@ -1,4 +1,10 @@
 {
-  "version": null,
-  "files": {}
+  "version": "0.2.0-beta.25",
+  "files": {
+    "mac": {
+      "url": "/downloads/macos-arm64",
+      "size": 300374553,
+      "sha256": "a01c704a95845e4698231d5cc316a3cd4ba50e3d49d5659ce3cded6d48106350"
+    }
+  }
 }
