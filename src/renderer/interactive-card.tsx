@@ -17,7 +17,7 @@ function Card() {
     const report = () => {
       const body = card.querySelector<HTMLElement>('.answer-text')
       const extra = body ? body.scrollHeight - body.clientHeight : 0
-      void window.opentype.desktop.card.resize(card.offsetHeight + extra + 12).catch(() => {})
+      void window.opentype.desktop.card.resize(Math.ceil(card.getBoundingClientRect().height + extra)).catch(() => {})
     }
     const observer = new ResizeObserver(report)
     observer.observe(card)

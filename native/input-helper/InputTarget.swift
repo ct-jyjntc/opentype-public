@@ -25,7 +25,7 @@ private func targetJSON(_ value: [String: Any]) -> UnsafeMutablePointer<CChar>? 
     guard let data = try? JSONSerialization.data(withJSONObject: value), let string = String(data: data, encoding: .utf8) else { return strdup("{}") }
     return strdup(string)
 }
-private func editableTarget(_ element: AXUIElement) -> AXUIElement? {
+private func editableTarget(_ element: AXUIElement, failure: ((String) -> Void)? = nil) -> AXUIElement? {
     var current: AXUIElement? = element
     for _ in 0..<12 {
         guard let node = current else { return nil }
@@ -33,11 +33,12 @@ private func editableTarget(_ element: AXUIElement) -> AXUIElement? {
         let subrole = targetAttr(node, kAXSubroleAttribute as String) as? String ?? ""
         if (role + subrole).lowercased().contains("secure") { return nil }
         if ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"].contains(role) {
-            if targetAttr(node, kAXEnabledAttribute as String) as? Bool == false || targetAttr(node, "AXEditable") as? Bool == false { return nil }
+            if targetAttr(node, kAXEnabledAttribute as String) as? Bool == false { failure?("injection_target_disabled"); return nil }
+            if targetAttr(node, "AXEditable") as? Bool == false { failure?("injection_target_readonly"); return nil }
             // Chromium readonly fields omit AXEditable entirely. Check value
             // editability before reading their contents or recording a token.
             var settable = DarwinBoolean(false)
-            guard AXUIElementIsAttributeSettable(node, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue else { return nil }
+            guard AXUIElementIsAttributeSettable(node, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue else { failure?("injection_target_value_not_settable"); return nil }
             return node
         }
         current = targetElement(targetAttr(node, kAXParentAttribute as String))
@@ -151,7 +152,8 @@ private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePoint
     guard AXUIElementGetPid(focused, &pid) == .success, pid == app.processIdentifier, !secureTarget(focused) else {
         result["reason"] = "injection_target_unavailable"; result["contextRedacted"] = true; return targetJSON(result)
     }
-    let editable = editableTarget(focused), element = editable ?? focused
+    var captureFailure = "injection_target_not_editable"
+    let editable = editableTarget(focused, failure: { captureFailure = $0 }), element = editable ?? focused
     if let window = targetElement(targetAttr(element, kAXWindowAttribute as String)),
        let rawPosition = targetAttr(window, kAXPositionAttribute as String),
        let rawSize = targetAttr(window, kAXSizeAttribute as String),
@@ -168,6 +170,7 @@ private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePoint
     result["role"] = targetAttr(element, kAXRoleAttribute as String) as? String ?? ""
     if let editable, inputTargets.count < 16 {
         let snapshot = InputTarget(app: app, element: editable)
+        captureFailure = snapshot.value == nil ? "injection_target_value_unavailable" : snapshot.range == nil ? "injection_target_range_unavailable" : "injection_selection_changed"
         if let value = snapshot.value, let range = snapshot.range, expectedInsertion(value, range, "") != nil {
             let token = UUID().uuidString
             inputTargets[token] = snapshot; result["token"] = token
@@ -182,7 +185,7 @@ private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePoint
     }
     // Explicit question mode may read the user's selected text without making
     // the source an insertion target. Never copy the entire readonly document.
-    result["reason"] = "injection_target_unavailable"
+    result["reason"] = inputTargets.count >= 16 ? "injection_target_capacity" : captureFailure
     if allowReadOnlySelection && !web.redacted, let text = selectedTargetText(element), !text.isEmpty {
         result["selectedText"] = text; result["selectionReadOnly"] = true
     }

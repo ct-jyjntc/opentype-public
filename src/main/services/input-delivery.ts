@@ -43,7 +43,7 @@ export async function deliverToInput(
     // Chromium applies AX focus and selection changes asynchronously. The
     // native commit still rechecks the exact range immediately before paste.
     if (state.reason !== 'injection_focus_pending' && state.reason !== 'injection_selection_changed') throw new Error(state.reason || 'injection_target_unavailable')
-    pendingReason = state.reason === 'injection_focus_pending' ? 'injection_target_unavailable' : state.reason
+    pendingReason = state.reason === 'injection_focus_pending' ? 'injection_focus_timeout' : state.reason
     await pause(40)
   }
   signal.throwIfAborted()

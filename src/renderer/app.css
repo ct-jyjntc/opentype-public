@@ -1709,6 +1709,18 @@ input[type='checkbox'] { accent-color: var(--text); width: 16px; height: 16px; c
 .answer-card footer { border-top: 0; background: none; padding: 4px 18px 18px; }
 .answer-card footer button:not(.primary) { background: var(--soft); border-color: transparent; }
 .answer-card .answer-status { border-top: 0; }
+/* A transparent window contains one card surface, sized to its content. */
+html.interactive-card-page,
+.interactive-card-page body,
+.interactive-card-page #root { background: transparent; }
+.interactive-card-page .answer-card {
+  margin: 0;
+  max-height: 100vh;
+  box-shadow: none;
+}
+.interactive-card-page .answer-card header,
+.interactive-card-page .answer-card footer,
+.interactive-card-page .answer-status { flex-shrink: 0; }
 .retention-panel { margin-bottom: 26px; }
 .retention-panel + .list-toolbar { margin-bottom: 14px; }
 

@@ -526,10 +526,10 @@ function onLoginSuccess(): void {
 /**
  * 交互卡片窗口：展示 AI 回答（ask_anything 模式的结果）。
  *
- * 尺寸常量：最小 400、最大 700，内容高度由渲染层上报。
+ * 尺寸常量：最小 120、最大 700，内容高度由渲染层上报。
  * 显示在鼠标所在显示器，避免多屏时出现在错误的屏幕。
  */
-const CARD_MIN_HEIGHT = 0xdc    // 220; the card reports its content height and the window follows
+const CARD_MIN_HEIGHT = 120    // Short fallback messages should not leave empty space below the card.
 const CARD_MAX_HEIGHT = 0x2bc   // 700
 
 function createInteractiveWindow(): BrowserWindow {
