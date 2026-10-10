@@ -96,6 +96,10 @@ beta.25 没有新增数据库结构迁移，保留现有 JWT、数据库与会�
 
 部署时先校验线上 release 与 `ff9ffcb` 逐文件一致，再用 `node:sqlite` 在线备份数据库（完整性 ok，19 个用户、90 条历史），连同 drop-in、`/etc/opentype.env` 和 Turnstile 环境文件保存在 `/var/backups/opentype/before-fixes-20261010T162319Z/`；在数据库副本上以服务用户预演通过后，仅修改 drop-in 的 `WorkingDirectory` 并重启。切换后本机与公网 `/health` 为 200，Cloudflare 响应 `DYNAMIC/no-store`，用户、历史与会话数量不变。回滚：恢复备份的 `official-release.conf` 后 `daemon-reload` 并重启；新增列对旧代码无影响，无需恢复数据库。
 
+## 官网下载
+
+自 0.2.0 起，官网 Worker（`website/_worker.js`）从 GitHub `releases/latest` 读取最新**正式版**（排除草稿与预发布），生成 `/downloads/manifest.json` 并转发 `/downloads/macos-arm64` 对应版本的 DMG；结果在边缘缓存 5 分钟，GitHub 不可用时退回站内静态 `downloads/manifest.json`（缓存 60 秒）。发布新正式版后无需修改官网，最多 5 分钟后生效；静态 manifest 仅作兜底。官网通过 `npx wrangler@4.146.0 pages deploy website --project-name opentype-website --branch main` 部署。
+
 ## beta.26 发布衔接
 
 beta.26 安装包对应公开源码 `d87e95178efff27bc277635b3f7569e0fdd20724`。相对已验收的 beta.25，产品源码仅修改 `src/main/services/updater.ts` 的 CommonJS 默认导出读取；账号、模型、图标及服务端源码保持一致。线上 API 继续运行 `ff9ffcb4364edd4f661e987688d74ff53575ef9b`，不因桌面更新组件修复而重新切换服务。

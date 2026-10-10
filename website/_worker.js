@@ -3,6 +3,12 @@ const MODEL_PREFIX = `/downloads/models/sensevoice-int8/${MODEL_REVISION}/`;
 const DOWNLOADS = { '/downloads/macos-arm64': { key: 'mac', suffix: 'macOS-arm64.dmg' },
   '/downloads/windows-x64': { key: 'win', suffix: 'Windows-x64.exe' } };
 const UPSTREAM_HOSTS = new Set(['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'api.opentype.top']);
+const REPOSITORY = 'ct-jyjntc/opentype-public';
+// GitHub's "latest" release is the newest stable one: drafts and prereleases are excluded.
+const LATEST_RELEASE_API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
+// Edge-cached so the unauthenticated GitHub API limit is never reached; a new release shows up within this time.
+const LATEST_CACHE_SECONDS = 300;
+const LATEST_CACHE_KEY = 'https://www.opentype.top/__cache/latest-stable-release';
 
 function fail(status, message) {
   return new Response(message, { status, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
@@ -43,8 +49,51 @@ async function streamFile(request, upstream, filename, immutable = false) {
   return new Response(request.method === 'HEAD' ? null : response.body, { status: response.status, headers: outgoing });
 }
 
+/** Build the download manifest from the latest stable GitHub release, or null if it can't be read. */
+async function fetchLatestManifest() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  let release;
+  try {
+    const response = await fetch(LATEST_RELEASE_API, { headers: { 'user-agent': 'OpenType/website-downloads', accept: 'application/vnd.github+json' }, signal: controller.signal });
+    if (!response.ok) return null;
+    release = await response.json();
+  } catch { return null; }
+  finally { clearTimeout(timeout); }
+  const version = /^v(\d+\.\d+\.\d+)$/.exec(release?.tag_name || '')?.[1];
+  if (!version || release.draft || release.prerelease) return null;
+  const files = {};
+  for (const [path, { key, suffix }] of Object.entries(DOWNLOADS)) {
+    const asset = (release.assets || []).find(a => a.name === `OpenType-${version}-${suffix}` && a.state === 'uploaded');
+    if (!asset || !Number.isSafeInteger(asset.size) || asset.size <= 0) continue;
+    files[key] = { url: path, size: asset.size };
+    const sha256 = /^sha256:([0-9a-f]{64})$/.exec(asset.digest || '')?.[1];
+    if (sha256) files[key].sha256 = sha256;
+  }
+  return Object.keys(files).length ? { version, files } : null;
+}
+
+/** Latest stable manifest (edge-cached), falling back to the static manifest shipped with the site. */
+async function downloadManifest(request, env, ctx) {
+  const cache = caches.default, key = new Request(LATEST_CACHE_KEY);
+  const cached = await cache.match(key);
+  if (cached) return cached.json();
+  const latest = await fetchLatestManifest();
+  if (latest) {
+    const stored = new Response(JSON.stringify(latest), { headers: { 'content-type': 'application/json', 'cache-control': `public, max-age=${LATEST_CACHE_SECONDS}` } });
+    ctx?.waitUntil?.(cache.put(key, stored));
+    return latest;
+  }
+  const fallback = await env.ASSETS.fetch(new Request(new URL('/downloads/manifest.json', request.url)));
+  if (!fallback.ok) return null;
+  const manifest = await fallback.json();
+  // Back off briefly while GitHub is unreachable or rate-limited instead of retrying on every request.
+  ctx?.waitUntil?.(cache.put(key, new Response(JSON.stringify(manifest), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=60' } })));
+  return manifest;
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (!['GET', 'HEAD'].includes(request.method)) return fail(405, '仅支持读取请求。');
     if (url.pathname.startsWith(MODEL_PREFIX)) {
@@ -55,11 +104,17 @@ export default {
     if (DOWNLOADS[url.pathname]) {
       if (url.search) return fail(404, '文件不存在。');
       const info = DOWNLOADS[url.pathname];
-      const manifestResponse = await env.ASSETS.fetch(new Request(new URL('/downloads/manifest.json', url)));
-      const manifest = await manifestResponse.json();
-      if (!/^\d+\.\d+\.\d+(?:-[a-z]+\.\d+)?$/.test(manifest.version || '') || !manifest.files?.[info.key]) return fail(404, '该平台安装包暂未提供。');
+      const manifest = await downloadManifest(request, env, ctx);
+      if (!/^\d+\.\d+\.\d+(?:-[a-z]+\.\d+)?$/.test(manifest?.version || '') || !manifest.files?.[info.key]) return fail(404, '该平台安装包暂未提供。');
       const filename = `OpenType-${manifest.version}-${info.suffix}`;
       return streamFile(request, `https://github.com/ct-jyjntc/opentype-public/releases/download/v${manifest.version}/${filename}`, filename);
+    }
+    if (url.pathname === '/downloads/manifest.json') {
+      const manifest = await downloadManifest(request, env, ctx);
+      if (!manifest) return fail(503, '下载信息暂不可用，请稍后重试。');
+      return new Response(request.method === 'HEAD' ? null : JSON.stringify(manifest), { headers: {
+        'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' } });
     }
     const response = await env.ASSETS.fetch(request);
     const headers = new Headers(response.headers);
@@ -69,7 +124,6 @@ export default {
       headers.set('cache-control', 'no-store');
       headers.set('content-security-policy', "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; frame-src https://challenges.cloudflare.com; connect-src https://challenges.cloudflare.com; img-src 'self' data:; base-uri 'none'; form-action 'none'");
     }
-    if (url.pathname === '/downloads/manifest.json') headers.set('cache-control', 'no-store');
     return new Response(response.body, { status: response.status, headers });
   },
 };
