@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameS
 import { join } from 'node:path'
 import { errorMessage } from '../../shared/desktop'
 
-const keys = new Set(['reason', 'ok', 'submitted', 'uncertain', 'status', 'method', 'trusted', 'frontPid', 'frontBundleId', 'targetPid', 'targetBundleId', 'role', 'valueReadable', 'valueSettable', 'rangeReadable', 'rangeSettable', 'focusError', 'initialFocusError', 'focusRetries', 'pidError', 'focusMatches', 'frontMatches', 'focusReadable', 'axBootstrapAttempted', 'axBootstrapError', 'axForced', 'activateOk', 'raiseError', 'setFocusError', 'setRangeError'])
+const keys = new Set(['reason', 'ok', 'submitted', 'uncertain', 'status', 'method', 'trusted', 'frontPid', 'frontBundleId', 'targetPid', 'targetBundleId', 'role', 'valueReadable', 'valueSettable', 'rangeReadable', 'rangeSettable', 'focusError', 'focusSource', 'globalFocusError', 'appFocusError', 'initialFocusError', 'focusRetries', 'pidError', 'focusMatches', 'frontMatches', 'focusReadable', 'axBootstrapAttempted', 'axBootstrapError', 'axForced', 'activateOk', 'raiseError', 'setFocusError', 'setRangeError'])
 const stages = new Set(['capture-start', 'capture-result', 'capture-bridge', 'prepare-start', 'prepare-result', 'prepare-bridge', 'ready', 'ready-bridge', 'commit-start', 'commit-result', 'commit-bridge', 'verify', 'verify-bridge', 'delivery-start', 'delivery-result', 'delivery-failed'])
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
 function safeReason(value: unknown): value is string { return typeof value === 'string' && /^injection_[a-z_]+$/.test(value) && errorMessage(value) !== value }
@@ -18,6 +18,7 @@ function sanitize(metadata: Record<string, unknown>) {
     else if (typeof value === 'string') {
       if ((key === 'frontBundleId' || key === 'targetBundleId') && !/^[a-zA-Z0-9._-]{0,160}$/.test(value)) continue
       if (key === 'role' && !/^AX[a-zA-Z0-9]{1,80}$/.test(value)) continue
+      if (key === 'focusSource' && !['system', 'application', 'none'].includes(value)) continue
       if (key === 'method' && !['clipboard', 'unknown'].includes(value)) continue
       if (key === 'status' && !['verified', 'unverified', 'pending'].includes(value)) continue
       safe[key] = value.slice(0, 160)
