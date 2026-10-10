@@ -46,8 +46,41 @@ private func editableTarget(_ element: AXUIElement, failure: ((String) -> Void)?
     return nil
 }
 private func focusedTarget() -> AXUIElement? {
-    guard let element = targetElement(targetAttr(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as String)) else { return nil }
+    guard let element = systemFocusedElement().element else { return nil }
     return editableTarget(element)
+}
+
+/// Read the current system focus. Callers outside capture must never wait or
+/// mutate another app's accessibility settings.
+private typealias FocusResult = (element: AXUIElement?, error: AXError, forcedAX: Bool, bootstrapAttempted: Bool, bootstrapError: Int?, initialFocusError: Int, focusRetries: Int)
+private func systemFocusedElement() -> FocusResult {
+    var value: CFTypeRef?
+    let error = AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &value)
+    if error == .success, let element = targetElement(value) { return (element, .success, false, false, nil, Int(error.rawValue), 0) }
+    return (nil, error, false, false, nil, Int(error.rawValue), 0)
+}
+
+/// Electron can return AXError.noValue until its accessibility tree is enabled.
+/// Bootstrap and retry only during capture, with a strict one-second bound.
+private func captureFocusedElement(app: NSRunningApplication) -> FocusResult {
+    let initial = systemFocusedElement()
+    guard initial.element == nil, initial.error == .noValue,
+          NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return initial }
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    let bootstrapError = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    guard bootstrapError == .success else { return (nil, initial.error, false, true, Int(bootstrapError.rawValue), initial.initialFocusError, 0) }
+    let deadline = ProcessInfo.processInfo.systemUptime + 1.0
+    var error = initial.error
+    var value: CFTypeRef?
+    var retries = 0
+    while ProcessInfo.processInfo.systemUptime < deadline {
+        Thread.sleep(forTimeInterval: 0.05)
+        value = nil
+        error = AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &value)
+        retries += 1
+        if error == .success, let element = targetElement(value) { return (element, .success, true, true, Int(bootstrapError.rawValue), initial.initialFocusError, retries) }
+    }
+    return (nil, error, true, true, Int(bootstrapError.rawValue), initial.initialFocusError, retries)
 }
 
 /// AX ranges use UTF-16, not Swift grapheme counts. Refuse out-of-bounds and
@@ -178,12 +211,33 @@ private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePoint
     var result: [String: Any] = ["diagnostics": targetDiagnostics(app: app), "appName": app?.localizedName ?? "", "bundleId": app?.bundleIdentifier ?? "", "pid": Int(app?.processIdentifier ?? 0)]
     guard AXIsProcessTrusted() else { result["reason"] = "injection_permission"; return targetJSON(result) }
     guard let app else { result["reason"] = "injection_front_app_missing"; return targetJSON(result) }
-    var focusValue: CFTypeRef?
-    let focusError = AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focusValue)
-    guard focusError == .success, let focused = targetElement(focusValue) else {
+    let focus = captureFocusedElement(app: app)
+    var focusDiagnostics = targetDiagnostics(app: app)
+    focusDiagnostics["focusError"] = focus.error.rawValue
+    focusDiagnostics["focusReadable"] = focus.element != nil
+    focusDiagnostics["axBootstrapAttempted"] = focus.bootstrapAttempted
+    focusDiagnostics["initialFocusError"] = focus.initialFocusError
+    focusDiagnostics["focusRetries"] = focus.focusRetries
+    if let bootstrapError = focus.bootstrapError { focusDiagnostics["axBootstrapError"] = bootstrapError }
+    if focus.forcedAX { focusDiagnostics["axForced"] = true }
+    guard let focused = focus.element else {
+        result["diagnostics"] = focusDiagnostics
         result["reason"] = "injection_focus_unavailable"; return targetJSON(result)
     }
-    result["diagnostics"] = targetDiagnostics(focused, app: app)
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+        focusDiagnostics["frontMatches"] = false
+        result["diagnostics"] = focusDiagnostics
+        result["reason"] = "injection_focus_unavailable"; return targetJSON(result)
+    }
+    focusDiagnostics = targetDiagnostics(focused, app: app)
+    focusDiagnostics["focusError"] = focus.error.rawValue
+    focusDiagnostics["focusReadable"] = true
+    focusDiagnostics["axBootstrapAttempted"] = focus.bootstrapAttempted
+    focusDiagnostics["initialFocusError"] = focus.initialFocusError
+    focusDiagnostics["focusRetries"] = focus.focusRetries
+    if let bootstrapError = focus.bootstrapError { focusDiagnostics["axBootstrapError"] = bootstrapError }
+    if focus.forcedAX { focusDiagnostics["axForced"] = true }
+    result["diagnostics"] = focusDiagnostics
     var pid: pid_t = 0
     guard AXUIElementGetPid(focused, &pid) == .success else { result["reason"] = "injection_focus_pid_unavailable"; result["contextRedacted"] = true; return targetJSON(result) }
     guard pid == app.processIdentifier else { result["reason"] = "injection_focus_pid_mismatch"; result["contextRedacted"] = true; return targetJSON(result) }

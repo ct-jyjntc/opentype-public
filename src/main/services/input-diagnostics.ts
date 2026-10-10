@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameS
 import { join } from 'node:path'
 import { errorMessage } from '../../shared/desktop'
 
-const keys = new Set(['reason', 'ok', 'submitted', 'uncertain', 'status', 'method', 'trusted', 'frontPid', 'frontBundleId', 'targetPid', 'targetBundleId', 'role', 'valueReadable', 'valueSettable', 'rangeReadable', 'rangeSettable', 'focusError', 'pidError', 'focusMatches', 'frontMatches', 'focusReadable', 'activateOk', 'raiseError', 'setFocusError', 'setRangeError'])
+const keys = new Set(['reason', 'ok', 'submitted', 'uncertain', 'status', 'method', 'trusted', 'frontPid', 'frontBundleId', 'targetPid', 'targetBundleId', 'role', 'valueReadable', 'valueSettable', 'rangeReadable', 'rangeSettable', 'focusError', 'initialFocusError', 'focusRetries', 'pidError', 'focusMatches', 'frontMatches', 'focusReadable', 'axBootstrapAttempted', 'axBootstrapError', 'axForced', 'activateOk', 'raiseError', 'setFocusError', 'setRangeError'])
 const stages = new Set(['capture-start', 'capture-result', 'capture-bridge', 'prepare-start', 'prepare-result', 'prepare-bridge', 'ready', 'ready-bridge', 'commit-start', 'commit-result', 'commit-bridge', 'verify', 'verify-bridge', 'delivery-start', 'delivery-result', 'delivery-failed'])
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
 function safeReason(value: unknown): value is string { return typeof value === 'string' && /^injection_[a-z_]+$/.test(value) && errorMessage(value) !== value }
