@@ -21,7 +21,7 @@
     message.textContent = '请完成下面的安全验证。';
     widget = window.turnstile.render('#challenge', {
       sitekey: '0x4AAAAAAFSeaJwY-fxE1JfZ', action, cData: requestId,
-      theme: 'auto', size: 'flexible',
+      theme: 'auto', size: window.parent === window ? 'flexible' : 'normal',
       callback(token) { message.textContent = '验证完成，可以继续。'; retry.hidden = true; send('token', token); },
       'expired-callback'() { message.textContent = '验证已过期，请重新验证。'; retry.hidden = false; send('expired'); },
       'error-callback'() { message.textContent = '验证暂不可用，请检查网络后重试。'; retry.hidden = false; send('error'); },
