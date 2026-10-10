@@ -22,6 +22,7 @@ import ApplicationServices
         precondition(observedInsertion("abcd", CFRange(location: 1, length: 1), "a") == nil)
         precondition(observedInsertion("Hi🙂你好", CFRange(location: 3, length: 0), "Hi🙂你好") == nil)
         precondition(observedInsertion("", CFRange(location: 0, length: 0), String(repeating: "a", count: 100_001)) == nil)
+        precondition(keyCode(forCharacter: "v") != nil)
         print("PASS native UTF-16 insertion, selected replacement, empty/multiline/emoji, invalid range protection and AX URL representations")
     }
 }

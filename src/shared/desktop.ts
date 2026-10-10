@@ -236,6 +236,7 @@ export function errorMessage(error: unknown): string {
     injection_clipboard_changed: '剪贴板已被其他操作更新，已停止自动粘贴',
     injection_keys_held: '请先松开修饰键；文字已保留，可手动复制',
     injection_front_app_missing: '未找到前台应用，文字已保存',
+    injection_app_changed: '已切换到其他应用，未粘贴；文字已保存',
     injection_focus_unavailable: '无法读取输入框焦点，文字已保存',
     injection_focus_pid_unavailable: '无法确认输入框所属应用，文字已保存',
     injection_focus_pid_mismatch: '焦点与前台应用不一致，文字已保存',

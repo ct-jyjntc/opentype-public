@@ -17,7 +17,7 @@ await test('confirmed input is committed once to the captured token, after readi
   const f = fixture(); assert.equal((await f.run()).status, 'verified'); assert.deepEqual(f.calls, ['prepare','ready','commit','verify'])
 })
 await test('missing permissions, invalid targets, changed contents and changed selection never commit', async () => {
-  for (const reason of ['injection_permission','injection_target_closed','injection_target_changed','injection_selection_changed']) {
+  for (const reason of ['injection_permission','injection_target_closed','injection_target_changed','injection_selection_changed','injection_app_changed']) {
     const f = fixture({ ready: () => ({ reason }) }); await assert.rejects(f.run(), new RegExp(reason)); assert(!f.calls.includes('commit'))
   }
   const f=fixture(); await assert.rejects(deliverToInput(f.native, {reason:'injection_target_unavailable'},'text',f.controller.signal), /injection_target_unavailable/); assert.equal(f.calls.length,0)

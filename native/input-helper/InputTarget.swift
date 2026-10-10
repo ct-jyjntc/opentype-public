@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 
 private func targetAttr(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
@@ -113,35 +114,17 @@ private func focusedElement(app: NSRunningApplication?) -> FocusResult {
                        appError: appError, initialFocusError: Int(appError?.rawValue ?? global.error.rawValue))
 }
 
-/// Electron can return AXError.noValue until its accessibility tree is enabled.
-/// Bootstrap and retry only during capture, with a strict one-second bound.
-private func captureFocusedElement(app: NSRunningApplication) -> FocusResult {
-    let initial = focusedElement(app: app)
-    guard initial.element == nil, initial.globalError == .noValue,
-          NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return initial }
-    let appElement = AXUIElementCreateApplication(app.processIdentifier)
-    let bootstrapError = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-    // Some providers reject this optional bootstrap attribute. Still perform
-    // the ordinary read-only focus queries; unsupported bootstrap is not a
-    // reason to suppress a focus value the app may already expose.
-    if bootstrapError != .success {
-        var result = focusedElement(app: app)
-        result.bootstrapAttempted = true
-        result.bootstrapError = Int(bootstrapError.rawValue)
-        return result
+/// Context only: Electron hides its AX tree until AXManualAccessibility is set.
+/// Ask once without waiting, so later reads (and the next dictation) can see
+/// the field. Delivery never depends on this; see commitInputTargetOnMain.
+private func readFocusForContext(app: NSRunningApplication) -> FocusResult {
+    var focus = focusedElement(app: app)
+    if focus.element == nil, focus.globalError == .noValue {
+        let error = AXUIElementSetAttributeValue(AXUIElementCreateApplication(app.processIdentifier), "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        focus.bootstrapAttempted = true
+        if error != .success { focus.bootstrapError = Int(error.rawValue) }
     }
-    let deadline = ProcessInfo.processInfo.systemUptime + 1.0
-    var result = initial
-    while ProcessInfo.processInfo.systemUptime < deadline {
-        Thread.sleep(forTimeInterval: 0.05)
-        result = focusedElement(app: app)
-        result.forcedAX = true
-        result.bootstrapAttempted = true
-        result.bootstrapError = Int(bootstrapError.rawValue)
-        result.focusRetries += 1
-        if result.element != nil { return result }
-    }
-    return result
+    return focus
 }
 
 /// AX ranges use UTF-16, not Swift grapheme counts. Refuse out-of-bounds and
@@ -158,7 +141,11 @@ func expectedInsertion(_ original: String, _ range: CFRange, _ text: String) -> 
 
 private final class InputTarget {
     let app: NSRunningApplication
-    let element: AXUIElement
+    /// nil for an app-level target: the app owns keyboard focus but does not
+    /// expose its focused field through Accessibility (Chromium before its tree
+    /// is built, games, Java/Qt/terminal views). Delivery then gates only on the
+    /// frontmost process, like an ordinary keyboard paste, and is unverified.
+    let element: AXUIElement?
     let window: AXUIElement?
     let value: String?
     let range: CFRange?
@@ -169,6 +156,10 @@ private final class InputTarget {
     var observingSince: TimeInterval?
     let webUrls: [String]
     let webRedacted: Bool
+    init(app: NSRunningApplication) {
+        self.app = app; element = nil; window = nil; value = nil; range = nil
+        webUrls = []; webRedacted = true
+    }
     init(app: NSRunningApplication, element: AXUIElement) {
         self.app = app; self.element = element
         window = targetElement(targetAttr(element, kAXWindowAttribute as String))
@@ -181,18 +172,14 @@ private final class InputTarget {
     func valid() -> String? {
         if !AXIsProcessTrusted() { return "injection_permission" }
         if app.isTerminated { return "injection_target_closed" }
-        guard !secureTarget(element), editableTarget(element) != nil else { return "injection_target_unavailable" }
-        if let value, targetAttr(element, kAXValueAttribute as String) as? String != value { return "injection_target_changed" }
+        if let element, secureTarget(element) { return "injection_secure_target" }
         return nil
     }
+    /// The only delivery gate: the app that was frontmost at capture is still
+    /// frontmost. Its own keyboard focus decides where the text lands.
     func ready() -> String? {
         if let error = valid() { return error }
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-              let focused = focusedTarget(app: app), CFEqual(focused, element) else { return "injection_focus_pending" }
-        if let range {
-            guard let current = targetRange(element), current.location == range.location, current.length == range.length else { return "injection_selection_changed" }
-        }
-        return nil
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier ? nil : "injection_app_changed"
     }
 }
 // Opaque handles never leave the main process and never enter history or network requests.
@@ -267,67 +254,60 @@ public func inputTargetDiagnostics(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeM
 
 private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePointer<CChar>? {
     let app = NSWorkspace.shared.frontmostApplication
-    var result: [String: Any] = ["diagnostics": targetDiagnostics(app: app), "appName": app?.localizedName ?? "", "bundleId": app?.bundleIdentifier ?? "", "pid": Int(app?.processIdentifier ?? 0)]
-    guard AXIsProcessTrusted() else { result["reason"] = "injection_permission"; return targetJSON(result) }
-    guard let app else { result["reason"] = "injection_front_app_missing"; return targetJSON(result) }
-    let focus = captureFocusedElement(app: app)
-    var focusDiagnostics = targetDiagnostics(app: app)
-    addFocusDiagnostics(focus, to: &focusDiagnostics)
-    guard let focused = focus.element else {
-        result["diagnostics"] = focusDiagnostics
-        result["reason"] = "injection_focus_unavailable"; return targetJSON(result)
+    var result: [String: Any] = ["appName": app?.localizedName ?? "", "bundleId": app?.bundleIdentifier ?? "", "pid": Int(app?.processIdentifier ?? 0)]
+    guard AXIsProcessTrusted() else { result["diagnostics"] = targetDiagnostics(app: app); result["reason"] = "injection_permission"; return targetJSON(result) }
+    guard let app else { result["diagnostics"] = targetDiagnostics(app: app); result["reason"] = "injection_front_app_missing"; return targetJSON(result) }
+    // Best effort: the focused field only adds context, selection and later
+    // verification. Failing to read it never blocks delivery.
+    let focus = readFocusForContext(app: app)
+    var field: AXUIElement?
+    if let focused = focus.element {
+        var pid: pid_t = 0
+        if AXUIElementGetPid(focused, &pid) == .success, pid == app.processIdentifier { field = focused }
     }
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
-        focusDiagnostics["frontMatches"] = false
-        result["diagnostics"] = focusDiagnostics
-        result["reason"] = "injection_focus_unavailable"; return targetJSON(result)
-    }
-    focusDiagnostics = targetDiagnostics(focused, app: app)
-    addFocusDiagnostics(focus, to: &focusDiagnostics)
-    result["diagnostics"] = focusDiagnostics
-    var pid: pid_t = 0
-    guard AXUIElementGetPid(focused, &pid) == .success else { result["reason"] = "injection_focus_pid_unavailable"; result["contextRedacted"] = true; return targetJSON(result) }
-    guard pid == app.processIdentifier else { result["reason"] = "injection_focus_pid_mismatch"; result["contextRedacted"] = true; return targetJSON(result) }
-    guard !secureTarget(focused) else { result["reason"] = "injection_secure_target"; result["contextRedacted"] = true; return targetJSON(result) }
-    var captureFailure = "injection_target_not_editable"
-    let editable = editableTarget(focused, failure: { captureFailure = $0 }), element = editable ?? focused
-    if let window = targetElement(targetAttr(element, kAXWindowAttribute as String)),
-       let rawPosition = targetAttr(window, kAXPositionAttribute as String),
-       let rawSize = targetAttr(window, kAXSizeAttribute as String),
-       CFGetTypeID(rawPosition) == AXValueGetTypeID(), CFGetTypeID(rawSize) == AXValueGetTypeID() {
-        var position = CGPoint.zero, size = CGSize.zero
-        if AXValueGetValue(rawPosition as! AXValue, .cgPoint, &position),
-           AXValueGetValue(rawSize as! AXValue, .cgSize, &size) {
-            result["windowBounds"] = ["x": position.x, "y": position.y, "width": size.width, "height": size.height]
-        }
-    }
-    let web = targetWebContext(element)
-    result["webUrls"] = web.urls; result["webUrl"] = web.urls.first
-    result["contextRedacted"] = web.redacted
-    result["role"] = targetAttr(element, kAXRoleAttribute as String) as? String ?? ""
-    if let editable, inputTargets.count < 16 {
-        let snapshot = InputTarget(app: app, element: editable)
-        captureFailure = snapshot.value == nil ? "injection_target_value_unavailable" : snapshot.range == nil ? "injection_target_range_unavailable" : "injection_selection_changed"
-        if let value = snapshot.value, let range = snapshot.range, expectedInsertion(value, range, "") != nil {
-            let token = UUID().uuidString
-            inputTargets[token] = snapshot; result["token"] = token
-            if !web.redacted {
-                let source = value as NSString
-                result["selectedText"] = source.substring(with: NSRange(location: range.location, length: range.length))
-                let start = max(0, range.location - 800), end = min(source.length, range.location + range.length + 400)
-                result["contextText"] = source.substring(with: NSRange(location: start, length: min(2000, end - start)))
+    var diagnostics = targetDiagnostics(field, app: app)
+    addFocusDiagnostics(focus, to: &diagnostics)
+    result["diagnostics"] = diagnostics
+    result["contextRedacted"] = true
+    if let field, secureTarget(field) { result["reason"] = "injection_secure_target"; return targetJSON(result) }
+    let editable = field.flatMap { editableTarget($0) }
+    if let element = editable ?? field {
+        if let window = targetElement(targetAttr(element, kAXWindowAttribute as String)),
+           let rawPosition = targetAttr(window, kAXPositionAttribute as String),
+           let rawSize = targetAttr(window, kAXSizeAttribute as String),
+           CFGetTypeID(rawPosition) == AXValueGetTypeID(), CFGetTypeID(rawSize) == AXValueGetTypeID() {
+            var position = CGPoint.zero, size = CGSize.zero
+            if AXValueGetValue(rawPosition as! AXValue, .cgPoint, &position),
+               AXValueGetValue(rawSize as! AXValue, .cgSize, &size) {
+                result["windowBounds"] = ["x": position.x, "y": position.y, "width": size.width, "height": size.height]
             }
-            return targetJSON(result)
         }
+        let web = targetWebContext(element)
+        result["webUrls"] = web.urls; result["webUrl"] = web.urls.first
+        result["contextRedacted"] = web.redacted
+        result["role"] = targetAttr(element, kAXRoleAttribute as String) as? String ?? ""
     }
-    // Explicit question mode may read the user's selected text without making
-    // the source an insertion target. Never copy the entire readonly document.
-    result["reason"] = inputTargets.count >= 16 ? "injection_target_capacity" : captureFailure
-    if allowReadOnlySelection && !web.redacted, let text = selectedTargetText(element), !text.isEmpty {
-        result["selectedText"] = text; result["selectionReadOnly"] = true
+    let redacted = result["contextRedacted"] as? Bool ?? true
+    // Question mode keeps its old contract: a read-only selection is context,
+    // not a place to paste the answer.
+    if allowReadOnlySelection && editable == nil {
+        result["reason"] = "injection_target_not_editable"
+        if !redacted, let field, let text = selectedTargetText(field), !text.isEmpty { result["selectedText"] = text; result["selectionReadOnly"] = true }
+        return targetJSON(result)
+    }
+    guard inputTargets.count < 16 else { result["reason"] = "injection_target_capacity"; return targetJSON(result) }
+    let target = editable.map { InputTarget(app: app, element: $0) } ?? InputTarget(app: app)
+    let token = UUID().uuidString
+    inputTargets[token] = target; result["token"] = token
+    if !redacted, let value = target.value, let range = target.range, expectedInsertion(value, range, "") != nil {
+        let source = value as NSString
+        result["selectedText"] = source.substring(with: NSRange(location: range.location, length: range.length))
+        let start = max(0, range.location - 800), end = min(source.length, range.location + range.length + 400)
+        result["contextText"] = source.substring(with: NSRange(location: start, length: min(2000, end - start)))
     }
     return targetJSON(result)
 }
+
 @_cdecl("captureInputTarget")
 public func captureInputTarget() -> UnsafeMutablePointer<CChar>? { captureTarget(false) }
 @_cdecl("captureCommandTarget")
@@ -335,17 +315,10 @@ public func captureCommandTarget() -> UnsafeMutablePointer<CChar>? { captureTarg
 
 private func prepareInputTargetOnMain(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     guard let tokenPtr, let target = inputTargets[String(cString: tokenPtr)], !target.submitted else { return targetJSON(["reason": "injection_target_unavailable"]) }
-    if let reason = target.valid() { return targetJSON(["reason": reason]) }
-    // Activate only this existing process. A closed target is never relaunched.
-    let activated = target.app.activate(options: [.activateIgnoringOtherApps])
-    guard activated else { return targetJSON(["reason": "injection_activation_failed", "activateOk": false]) }
-    var result: [String: Any] = ["ok": true, "activateOk": true]
-    if let window = target.window { result["raiseError"] = AXUIElementPerformAction(window, kAXRaiseAction as CFString).rawValue }
-    result["setFocusError"] = AXUIElementSetAttributeValue(target.element, kAXFocusedAttribute as CFString, kCFBooleanTrue).rawValue
-    if var range = target.range, let axRange = AXValueCreate(.cfRange, &range) {
-        result["setRangeError"] = AXUIElementSetAttributeValue(target.element, kAXSelectedTextRangeAttribute as CFString, axRange).rawValue
-    }
-    return targetJSON(result)
+    // Never activate or refocus: if the user moved to another app, the text
+    // stays saved instead of being pasted somewhere they are not looking.
+    if let reason = target.ready() { return targetJSON(["reason": reason]) }
+    return targetJSON(["ok": true])
 }
 
 @_cdecl("inputTargetReady")
@@ -361,25 +334,29 @@ private func commitInputTargetOnMain(_ tokenPtr: UnsafePointer<CChar>?, _ textPt
     if let reason = target.ready() { return targetJSON(["reason": reason]) }
     let text = String(cString: textPtr)
     guard !text.isEmpty else { return targetJSON(["reason": "injection_failed"]) }
-    if let value = target.value, let range = target.range {
-        guard let expected = expectedInsertion(value, range, text) else { return targetJSON(["reason": "injection_selection_changed"]) }
+    if let value = target.value, let range = target.range, let expected = expectedInsertion(value, range, text) {
         target.expected = expected
         target.insertedText = text
     }
-    // Chromium advertises AXSelectedText as settable but may ignore the write.
-    // Send one normal paste to the captured process, preserving editor undo and
-    // input handlers, then verify the resulting value. Never retry a write.
     target.submitted = true
-    guard pasteViaClipboard(text, pid: target.app.processIdentifier) else { return targetJSON(["reason": "injection_failed"]) }
-    return targetJSON(["submitted": true, "method": "clipboard"])
+    switch insertViaAccessibility(text, targetPID: target.app.processIdentifier) {
+    case .inserted: return targetJSON(["submitted": true, "method": "accessibility"])
+    case .uncertain: return targetJSON(["submitted": true, "method": "accessibility", "uncertain": true])
+    case .unavailable: break
+    }
+    switch pasteThroughClipboard(text, targetPID: target.app.processIdentifier) {
+    case .posted: return targetJSON(["submitted": true, "method": "clipboard"])
+    case .appChanged: target.submitted = false; return targetJSON(["reason": "injection_app_changed"])
+    case .clipboardFailed: target.submitted = false; return targetJSON(["reason": "injection_clipboard_unavailable"])
+    }
 }
 
 @_cdecl("verifyInputTarget")
 public func verifyInputTarget(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     guard let tokenPtr, let target = inputTargets[String(cString: tokenPtr)], target.submitted else { return targetJSON(["reason": "injection_target_unavailable"]) }
-    guard let expected = target.expected else { return targetJSON(["status": "unverified"]) }
-    guard !target.app.isTerminated, !secureTarget(target.element) else { return targetJSON(["status": "unverified"]) }
-    guard let value = targetAttr(target.element, kAXValueAttribute as String) as? String else { return targetJSON(["status": "unverified"]) }
+    guard let expected = target.expected, let element = target.element else { return targetJSON(["status": "unverified"]) }
+    guard !target.app.isTerminated, !secureTarget(element) else { return targetJSON(["status": "unverified"]) }
+    guard let value = targetAttr(element, kAXValueAttribute as String) as? String else { return targetJSON(["status": "unverified"]) }
     if value == expected { target.verified = true }
     return targetJSON(["status": value == expected ? "verified" : "pending"])
 }
@@ -402,7 +379,7 @@ func observedInsertion(_ original: String, _ range: CFRange, _ current: String) 
 
 @_cdecl("beginInputObservation")
 public func beginInputObservation(_ tokenPtr: UnsafePointer<CChar>?, _ textPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
-    guard let tokenPtr, let textPtr, let target = inputTargets[String(cString: tokenPtr)], target.verified,
+    guard let tokenPtr, let textPtr, let target = inputTargets[String(cString: tokenPtr)], target.verified, target.element != nil,
           target.insertedText == String(cString: textPtr), !target.webRedacted,
           let original = target.value, let range = target.range, let expected = target.expected,
           observedInsertion(original, range, expected) == target.insertedText else { return targetJSON(["ok": false]) }
@@ -416,14 +393,14 @@ public func readInputObservation(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeMut
           ProcessInfo.processInfo.systemUptime - since < 60 else { return targetJSON(["active": false, "reason": "expired"]) }
     guard AXIsProcessTrusted(), !target.app.isTerminated else { return targetJSON(["active": false, "reason": "unavailable"]) }
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.app.processIdentifier else { return targetJSON(["active": false, "reason": "app_changed"]) }
-    guard !secureTarget(target.element), let focused = focusedTarget(app: target.app), CFEqual(focused, target.element) else { return targetJSON(["active": false, "reason": "field_changed"]) }
-    let web = targetWebContext(target.element)
+    guard let element = target.element, !secureTarget(element), let focused = focusedTarget(app: target.app), CFEqual(focused, element) else { return targetJSON(["active": false, "reason": "field_changed"]) }
+    let web = targetWebContext(element)
     guard !web.redacted, web.urls == target.webUrls else { return targetJSON(["active": false, "reason": "document_changed"]) }
     // The current field is read transiently to reject any change outside the
     // insertion. Nothing from a different target or outside that range returns.
     guard let original = target.value, let range = target.range,
-          let current = targetAttr(target.element, kAXValueAttribute as String) as? String,
-          let text = observedInsertion(original, range, current), let selected = targetRange(target.element),
+          let current = targetAttr(element, kAXValueAttribute as String) as? String,
+          let text = observedInsertion(original, range, current), let selected = targetRange(element),
           selected.location >= range.location, selected.length >= 0,
           selected.location <= range.location + (text as NSString).length,
           selected.length <= range.location + (text as NSString).length - selected.location else { return targetJSON(["active": false, "reason": "range_changed"]) }
@@ -450,4 +427,149 @@ public func prepareInputTarget(_ token: UnsafePointer<CChar>?) -> UnsafeMutableP
 @_cdecl("commitInputTarget")
 public func commitInputTarget(_ token: UnsafePointer<CChar>?, _ text: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     return onTargetMain { commitInputTargetOnMain(token, text) }
+}
+
+// MARK: - Delivery (same strategy as VocaMac's TextInjector)
+//
+// 1. Accessibility write of kAXSelectedText, only for single-line fields that
+//    say the write is settable. Multi-line views (editors, terminals,
+//    contenteditable) accept the write and then drop or mangle it.
+// 2. Otherwise the clipboard plus one Cmd+V on the session event tap, exactly
+//    like the user pressing it. The pasteboard item is a promise, so the
+//    target's read tells us when the paste landed and the user's clipboard
+//    can be put back.
+
+enum AccessibilityInsertion { case inserted, uncertain, unavailable }
+
+private let singleLineRoles: Set<String> = ["AXTextField", "AXSearchField", "AXComboBox"]
+
+/// Menu bar launchers (Raycast, Spotlight) take keyboard focus in a panel
+/// without becoming the frontmost app.
+private func isLauncherPanelOwner(_ pid: pid_t) -> Bool {
+    guard pid != ProcessInfo.processInfo.processIdentifier,
+          let app = NSRunningApplication(processIdentifier: pid) else { return false }
+    return app.activationPolicy != .regular
+}
+
+private func insertViaAccessibility(_ text: String, targetPID: pid_t) -> AccessibilityInsertion {
+    let systemWide = AXUIElementCreateSystemWide()
+    AXUIElementSetMessagingTimeout(systemWide, 0.1)
+    var focusedRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+          let element = targetElement(focusedRef) else { return .unavailable }
+    var pid: pid_t = 0
+    guard AXUIElementGetPid(element, &pid) == .success,
+          pid == targetPID || isLauncherPanelOwner(pid) else { return .unavailable }
+    AXUIElementSetMessagingTimeout(element, 0.1)
+    let role = targetAttr(element, kAXRoleAttribute as String) as? String ?? ""
+    guard singleLineRoles.contains(role), !secureTarget(element) else { return .unavailable }
+    var settable = DarwinBoolean(false)
+    guard AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success,
+          settable.boolValue else { return .unavailable }
+    let error = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
+    if error == .success { return .inserted }
+    // A timed-out write may still land; never follow it with a paste.
+    return error == .cannotComplete ? .uncertain : .unavailable
+}
+
+enum ClipboardPaste { case posted, appChanged, clipboardFailed }
+
+/// Clipboard managers that honour this marker skip our temporary entries.
+private let transientPasteboardType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+
+/// Supplies the text lazily and records whether the read came after our Cmd+V.
+final class PasteReceipt: NSObject, NSPasteboardItemDataProvider {
+    private let text: String
+    private let lock = NSLock()
+    private var posted = false, readBefore = false, readAfter = false
+    init(text: String) { self.text = text }
+    var wasReadBeforePaste: Bool { lock.lock(); defer { lock.unlock() }; return readBefore }
+    var wasReadAfterPaste: Bool { lock.lock(); defer { lock.unlock() }; return readAfter }
+    func markPosted() { lock.lock(); posted = true; lock.unlock() }
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        item.setString(text, forType: .string)
+        lock.lock(); if posted { readAfter = true } else { readBefore = true }; lock.unlock()
+    }
+}
+
+private let deliveryRestorer = PasteboardRestorer(NSPasteboard.general)
+
+private func writePromise(_ receipt: PasteReceipt, to pb: NSPasteboard) -> Bool {
+    pb.clearContents()
+    let item = NSPasteboardItem()
+    guard item.setDataProvider(receipt, forTypes: [.string]) else { return false }
+    item.setData(Data(), forType: transientPasteboardType)
+    return pb.writeObjects([item])
+}
+
+func pasteThroughClipboard(_ text: String, targetPID: pid_t) -> ClipboardPaste {
+    let pb = NSPasteboard.general
+    var original = deliveryRestorer.capture()
+    var receipt = PasteReceipt(text: text)
+    guard writePromise(receipt, to: pb) else { restorePasteboard(original, to: pb); return .clipboardFailed }
+    var restoreToken = deliveryRestorer.didWrite(original: original)
+    var changeCount = pb.changeCount
+    // Let the pasteboard settle before the keystroke.
+    Thread.sleep(forTimeInterval: 0.05)
+    if pb.changeCount != changeCount {
+        // Someone copied in between: theirs becomes the clipboard to restore.
+        original = archivePasteboard(pb)
+        receipt = PasteReceipt(text: text)
+        guard writePromise(receipt, to: pb) else { restorePasteboard(original, to: pb); return .clipboardFailed }
+        restoreToken = deliveryRestorer.didWrite(original: original)
+        changeCount = pb.changeCount
+    }
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
+        deliveryRestorer.restoreIfOwned(restoreToken)
+        return .appChanged
+    }
+    receipt.markPosted()
+    postCommandV()
+    restoreAfterPaste(receipt, token: restoreToken, changeCount: changeCount, start: ProcessInfo.processInfo.systemUptime)
+    return .posted
+}
+
+/// Keep our text on the clipboard until the target has read it, then put the
+/// user's clipboard back. 2s without a read (0.5s if something read it before
+/// the keystroke, which hides the target's own read) restores anyway.
+private func restoreAfterPaste(_ receipt: PasteReceipt, token: UUID, changeCount: Int, start: TimeInterval) {
+    let elapsed = ProcessInfo.processInfo.systemUptime - start
+    if receipt.wasReadAfterPaste {
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, 0.15 - elapsed)) { deliveryRestorer.restoreIfOwned(token) }
+        return
+    }
+    if NSPasteboard.general.changeCount != changeCount { return } // the user copied something newer
+    if elapsed >= (receipt.wasReadBeforePaste ? 0.5 : 2.0) { deliveryRestorer.restoreIfOwned(token); return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { restoreAfterPaste(receipt, token: token, changeCount: changeCount, start: start) }
+}
+
+/// Post Cmd+V where the window server routes real key presses, using the key
+/// that types "v" on the current layout (Dvorak, AZERTY, ...).
+private func postCommandV() {
+    let key = keyCode(forCharacter: "v") ?? CGKeyCode(kVK_ANSI_V)
+    let source = CGEventSource(stateID: .combinedSessionState)
+    for down in [true, false] {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else { continue }
+        event.flags = .maskCommand
+        event.post(tap: .cgAnnotatedSessionEventTap)
+    }
+}
+
+func keyCode(forCharacter character: Character) -> CGKeyCode? {
+    guard let source = (TISCopyCurrentASCIICapableKeyboardLayoutInputSource() ?? TISCopyCurrentKeyboardLayoutInputSource())?.takeRetainedValue(),
+          let layoutPointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+    let layout = Unmanaged<CFData>.fromOpaque(layoutPointer).takeUnretainedValue() as Data
+    let wanted = String(character)
+    return layout.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> CGKeyCode? in
+        guard let base = raw.baseAddress else { return nil }
+        let keyboard = base.assumingMemoryBound(to: UCKeyboardLayout.self)
+        var chars = [UniChar](repeating: 0, count: 4)
+        for code in 0..<128 {
+            var deadKeys: UInt32 = 0, length = 0
+            let status = UCKeyTranslate(keyboard, UInt16(code), UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
+                                        OptionBits(kUCKeyTranslateNoDeadKeysBit), &deadKeys, 4, &length, &chars)
+            if status == noErr, length > 0, String(utf16CodeUnits: chars, count: length) == wanted { return CGKeyCode(code) }
+        }
+        return nil
+    }
 }
