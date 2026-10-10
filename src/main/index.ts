@@ -19,7 +19,7 @@ import { registerDesktop, readPreferences } from './services/desktop'
 import { resolveSkill } from '../shared/skills'
 import { registerSkillActions } from './services/skill-actions'
 import { SelectionActions } from './services/selection-actions'
-import { desktopUpdater, registerUpdater } from './services/updater'
+import { desktopUpdater, recoverUpdateInstall, registerUpdater } from './services/updater'
 import { registerSettingsBackup } from './services/settings-backup'
 import { DictionarySync, registerDictionarySync } from './services/dictionary-sync'
 import { OutputAudioControl } from './services/output-audio'
@@ -2144,20 +2144,26 @@ app.setPath('userData', profile.userData)
 app.setPath('logs', profile.logs)
 app.setPath('sessionData', profile.userData)
 
-function confirmUpdaterRestart() {
+// The marker means "the new process started and owns this profile". It is
+// written right after ready + single-instance lock, before secure storage: an
+// ad-hoc update's first launch can block on a keychain prompt in initStore.
+// Returns whether this is an updater relaunch (the helper is still running).
+function confirmUpdaterRestart(): boolean {
+  if (!app.commandLine.hasSwitch('update-install-confirm-token')) return false
   const token = app.commandLine.getSwitchValue('update-install-confirm-token')
   const requestedPath = app.commandLine.getSwitchValue('update-install-confirm-path')
-  if (!/^[a-f0-9]{32}$/.test(token) || !requestedPath) return
+  if (!/^[a-f0-9]{32}$/.test(token) || !requestedPath) return true
   try {
     const installDir = join(app.getPath('userData'), 'update-install')
     mkdirSync(installDir, { recursive:true, mode:0o700 })
     const canonicalDir = realpathSync(installDir)
     const markerPath = join(canonicalDir, `confirm-${token}.json`)
-    if (resolve(requestedPath) !== markerPath || existsSync(markerPath)) return
+    if (resolve(requestedPath) !== markerPath || existsSync(markerPath)) return true
     writeFileSync(markerPath, JSON.stringify({ token, pid:process.pid, version:app.getVersion(), userDataPath:app.getPath('userData') }), { mode:0o600, flag:'wx' })
   } catch (error) {
     console.warn('[opentype] update restart confirmation failed:', error)
   }
+  return true
 }
 
 // Every webContents (main, bar, card, settings): no navigation away from the app's own pages
@@ -2191,6 +2197,9 @@ if (!gotLock) {
 }
 
 if (gotLock) app.whenReady().then(async () => {
+  // Before initStore/safeStorage (see confirmUpdaterRestart), then report the
+  // previous install result and sweep stale update leftovers.
+  recoverUpdateInstall(confirmUpdaterRestart())
   powerMonitor.on('lock-screen', closeInteractiveCard)
   powerMonitor.on('suspend', closeInteractiveCard)
   // store 必须在读取任何配置前就绪：热键绑定、编码器路径都依赖它
@@ -2260,7 +2269,6 @@ if (gotLock) app.whenReady().then(async () => {
   if (process.platform === 'darwin' && app.dock && !preferences.showInDock) app.dock.hide()
   registerIpc()
   barWindow = createBarWindow()
-  barWindow.webContents.once('did-finish-load', confirmUpdaterRestart)
   barPositioner = new FloatingBarPositioner(barWindow, floatingBarPreferences, floatingBar => {
     const saved = (store?.get('app-settings' as never) ?? {}) as Record<string, unknown>
     store?.set({ 'app-settings': { ...saved, floatingBar } } as never)

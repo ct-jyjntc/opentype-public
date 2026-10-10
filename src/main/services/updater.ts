@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, type WebContents } from 'electron'
 import type { AppUpdater, UpdateCheckResult, UpdateDownloadedEvent } from 'electron-updater'
 import { createHash, randomBytes } from 'node:crypto'
 import { access, constants, lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
-import { closeSync, createReadStream, existsSync, fstatSync, openSync, readSync } from 'node:fs'
+import { closeSync, createReadStream, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join, posix, resolve, sep } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -14,7 +14,12 @@ import type { UpdateState } from '../../shared/updater'
 const asarFs = require('original-fs') as typeof import('node:fs')
 const execFileAsync = promisify(execFile)
 const APP_ID = 'dev.opentype.desktop'
-const INSTALL_TIMEOUT_MS = 60_000
+// The app gives up on quitting first; the helper must wait strictly longer and
+// is terminated by the app's fallback, so it never installs after a cancel.
+const APP_QUIT_FALLBACK_MS = 65_000
+const HELPER_EXIT_WAIT_MS = 90_000
+const STALE_STAGE_MS = 3600_000
+const STALE_BACKUP_MS = 7 * 24 * 3600_000
 type PreparedInstall = { appPath: string; stageRoot: string; stagedApp: string; parentPath: string; version: string; sha512: string; candidateIdentity: string; startupConfirmation: boolean }
 
 async function command(file: string, args: string[], maxBuffer = 16 * 1024 * 1024) {
@@ -189,6 +194,15 @@ async function validateBundle(appPath: string, expectedVersion: string, currentI
   } else if (identity !== currentIdentity) throw new Error('更新包签名身份与当前应用不匹配')
   return identity
 }
+// Cheap install eligibility only; bundle/signature verification runs at download time.
+async function macAppRoot() {
+  const appRoot = await realpath(resolve(dirname(process.execPath), '..', '..'))
+  if (appRoot.includes('/AppTranslocation/')) throw new Error('当前应用位于 macOS 临时隔离位置，请将 OpenType 移入“应用程序”文件夹后再更新。')
+  if (!appRoot.endsWith('.app') || !existsSync(join(appRoot, 'Contents', 'Info.plist'))) throw new Error('无法确定当前应用位置，请将 OpenType 移入“应用程序”文件夹后再更新。')
+  const parentPath = await realpath(dirname(appRoot))
+  try { await access(parentPath, constants.W_OK) } catch { throw new Error('当前应用目录没有写入权限，请移入“应用程序”文件夹或检查权限。') }
+  return { appRoot, parentPath }
+}
 async function validateCurrentBundle(appPath: string, expected: { packageVersion:string; bundleVersion:string }, identity: string) {
   const info = await appInfo(appPath)
   if (info.bundleId !== APP_ID || info.packageVersion !== expected.packageVersion || info.bundleVersion !== expected.bundleVersion) throw new Error('当前应用在下载期间发生变化，请重新检查更新。')
@@ -251,13 +265,7 @@ class DesktopUpdater {
     if (!app.isPackaged || !['darwin','win32','linux'].includes(process.platform)) return this.publish({ phase:'unavailable', message:'开发环境不安装更新，请使用已安装的发行版或前往发布页。' })
     this.busy = true
     try {
-      if (process.platform === 'darwin') {
-        const bundle = resolve(dirname(process.execPath), '..', '..')
-        const info = await appInfo(bundle)
-        if (info.bundleId !== APP_ID) throw new Error('当前应用身份不匹配')
-        this.currentBundleVersion = info.bundleVersion; this.currentPackageVersion = info.packageVersion
-        this.currentIdentity = await signatureIdentity(bundle)
-      }
+      if (process.platform === 'darwin') await macAppRoot()
       const engine = await this.getEngine()
       engine.allowPrerelease = channel === 'beta'; engine.allowDowngrade = false
       const result = await engine.checkForUpdates()
@@ -269,6 +277,41 @@ class DesktopUpdater {
     } catch (error) { return this.publish({ phase:'error', message:`无法检查更新：${String(error instanceof Error ? error.message : error).slice(0, 300)}` }) }
     finally { this.busy = false }
   }
+  // Heavy current-bundle verification (PlistBuddy, lipo, asar, codesign) runs
+  // before downloading so a failure never blocks merely checking for updates.
+  private async verifyCurrentMacBundle() {
+    const { appRoot } = await macAppRoot()
+    const info = await appInfo(appRoot)
+    if (info.bundleId !== APP_ID) throw new Error('当前应用身份不匹配')
+    const identity = await signatureIdentity(appRoot)
+    this.currentBundleVersion = info.bundleVersion; this.currentPackageVersion = info.packageVersion; this.currentIdentity = identity
+  }
+  // Surfaces the previous helper run once; rollbackPending results are kept
+  // (renamed) so the startup sweep never deletes the referenced backup.
+  restoreLastInstallResult(installDir: string) {
+    const resultPath = join(installDir, 'last-result.json')
+    let result: { ok?: unknown; cancelled?: unknown; rollbackPending?: unknown; error?: unknown; backupPath?: unknown }
+    try {
+      const info = lstatSync(resultPath)
+      if (!info.isFile() || info.size > 64 * 1024) { rmSync(resultPath, { force:true }); return }
+      result = JSON.parse(readFileSync(resultPath, 'utf8')) as typeof result
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') try { rmSync(resultPath, { force:true }) } catch {}
+      return
+    }
+    const pending = result.rollbackPending === true
+    try {
+      if (pending) renameSync(resultPath, join(installDir, `rollback-pending-${Date.now()}.json`))
+      else rmSync(resultPath, { force:true })
+    } catch { return }
+    // Cancelled installs (app did not quit) were already reported in the running app.
+    if (result.ok !== false || (result.cancelled === true && !pending)) return
+    const reason = (typeof result.error === 'string' && result.error.trim() ? result.error.trim() : '未知原因').replace(/[，,]\s*正在恢复旧版本$/, '').slice(0, 300)
+    const backupPath = typeof result.backupPath === 'string' ? result.backupPath : undefined
+    this.publish({ phase:'error', message: pending
+      ? `上次更新未完成：${reason}。旧版本已备份在 ${backupPath ?? '应用目录'}，如当前版本异常可手动恢复。`
+      : `上次更新未完成：${reason}，已保留当前版本。` })
+  }
   private async prepareMacInstall(update: UpdateDownloadedEvent) {
     const files = this.checked?.updateInfo.files ?? []
     const zip = files.find(file => file.url.toLowerCase().endsWith('.zip'))
@@ -276,14 +319,10 @@ class DesktopUpdater {
     const downloaded = update.downloadedFile
     if (!downloaded || !existsSync(downloaded)) throw new Error('找不到已下载的更新 ZIP')
     if (await sha512(downloaded) !== zip.sha512) throw new Error('更新 ZIP 的 SHA-512 校验失败')
-    const appRoot = await realpath(resolve(dirname(process.execPath), '..', '..'))
-    if (appRoot.includes('/AppTranslocation/')) throw new Error('当前应用位于 macOS 临时隔离位置，请将 OpenType 移入“应用程序”文件夹后再更新。')
-    if (!appRoot.endsWith('.app') || !existsSync(join(appRoot, 'Contents', 'Info.plist'))) throw new Error('无法确定当前应用位置，请将 OpenType 移入“应用程序”文件夹后再更新。')
+    const { appRoot, parentPath } = await macAppRoot()
     const identity = this.currentIdentity ?? await signatureIdentity(appRoot)
     const currentInfo = await appInfo(appRoot)
     if (currentInfo.bundleId !== APP_ID || currentInfo.bundleVersion !== this.currentBundleVersion || currentInfo.packageVersion !== this.currentPackageVersion) throw new Error('当前应用在下载期间发生变化，请重新检查更新。')
-    const parentPath = await realpath(dirname(appRoot))
-    try { await access(parentPath, constants.W_OK) } catch { throw new Error('当前应用目录没有写入权限，请移入“应用程序”文件夹或检查权限。') }
     const probe = join(parentPath, `.opentype-write-${randomBytes(8).toString('hex')}`)
     try { await writeFile(probe, ''); await rm(probe) } catch { throw new Error('当前应用目录不可写（可能是只读磁盘映像），请先移入“应用程序”文件夹。') }
     const stageRoot = await mkdtemp(join(parentPath, '.opentype-update-'))
@@ -304,6 +343,7 @@ class DesktopUpdater {
     this.busy = true; this.cancelled = false; this.downloadedFile = undefined
     this.publish({ phase:'downloading', percent:0, message:undefined })
     try {
+      if (process.platform === 'darwin') await this.verifyCurrentMacBundle()
       const engine = await this.getEngine()
       await engine.downloadUpdate(this.checked.cancellationToken)
       if (this.cancelled) return this.publish({ phase:'cancelled', message:'下载已取消，可重新检查更新。' })
@@ -344,7 +384,7 @@ class DesktopUpdater {
         configPath = join(canonicalTempBase, `install-${randomBytes(12).toString('hex')}.json`)
         const confirmToken = randomBytes(16).toString('hex'), markerPath = this.prepared.startupConfirmation ? join(canonicalTempBase, `confirm-${confirmToken}.json`) : undefined
         const relaunchArgs = app.commandLine.getSwitchValue('user-data-dir')
-        await writeFile(configPath, JSON.stringify({ ...this.prepared, pid:process.pid, timeoutMs:INSTALL_TIMEOUT_MS, resultPath, logPath,
+        await writeFile(configPath, JSON.stringify({ ...this.prepared, pid:process.pid, timeoutMs:HELPER_EXIT_WAIT_MS, resultPath, logPath,
           currentIdentity:this.currentIdentity, confirmToken, markerPath, userDataPath:app.getPath('userData'),
           relaunchArgs: [...(relaunchArgs ? [`--user-data-dir=${relaunchArgs}`] : []), ...(markerPath ? [`--update-install-confirm-path=${markerPath}`] : []), `--update-install-confirm-token=${confirmToken}`] }), { mode:0o600, flag:'wx' })
         const { spawn } = await import('node:child_process')
@@ -367,11 +407,14 @@ class DesktopUpdater {
         this.publish({ phase:'installing', message:'正在退出应用并安装更新…' })
         setTimeout(() => {
           if (app.isReady() && this.state.phase === 'installing') {
+            // We are still running, so the helper is still waiting for us to exit:
+            // stop it before removing the staged copy it would otherwise install.
+            try { startedChild.kill('SIGTERM') } catch {}
             void rm(stageRoot, { recursive:true, force:true })
             this.installBusy = false
             this.publish({ phase:'error', message:'应用未能正常退出，安装已取消。请关闭应用后重试。' })
           }
-        }, INSTALL_TIMEOUT_MS + 5000).unref()
+        }, APP_QUIT_FALLBACK_MS).unref()
         app.quit()
         return
       } catch (error) {
@@ -396,6 +439,64 @@ class DesktopUpdater {
   }
 }
 export const desktopUpdater = new DesktopUpdater()
+
+function pendingRollbackBackups(installDir: string) {
+  const paths = new Set<string>()
+  try {
+    for (const name of readdirSync(installDir)) {
+      if (!/^rollback-pending-\d+\.json$/.test(name)) continue
+      try {
+        const value = (JSON.parse(readFileSync(join(installDir, name), 'utf8')) as { backupPath?: unknown }).backupPath
+        if (typeof value === 'string') paths.add(value)
+      } catch {}
+    }
+  } catch {}
+  return paths
+}
+// Removes leftovers of interrupted installs next to the app: staged copies
+// (>1 h) and backups (>7 d) owned by this user. Never follows symlinks and
+// uses original-fs so app.asar inside them is treated as a plain file.
+async function sweepStaleUpdateArtifacts(installDir: string) {
+  const uid = process.getuid?.()
+  if (uid === undefined) return
+  const appRoot = asarFs.realpathSync(resolve(dirname(process.execPath), '..', '..'))
+  if (!appRoot.endsWith('.app') || appRoot.includes('/AppTranslocation/')) return
+  const parentPath = dirname(appRoot), keep = pendingRollbackBackups(installDir)
+  keep.add(appRoot)
+  const now = Date.now()
+  for (const name of await asarFs.promises.readdir(parentPath)) {
+    const stage = /^\.opentype-update-[A-Za-z0-9]{6}$/.test(name)
+    const backup = /^\.opentype-backup-\d+-(\d+)\.app$/.exec(name)
+    if (!stage && !backup) continue
+    const file = join(parentPath, name)
+    try {
+      const info = await asarFs.promises.lstat(file)
+      if (info.isSymbolicLink() || !info.isDirectory() || info.uid !== uid || keep.has(file)) continue
+      const touched = Math.max(info.mtimeMs, info.ctimeMs, backup ? Number(backup[1]) : 0)
+      if (now - touched < (stage ? STALE_STAGE_MS : STALE_BACKUP_MS)) continue
+      await asarFs.promises.rm(file, { recursive:true, force:true })
+    } catch {}
+  }
+  // Confirmation markers a slow (unconfirmed) launch wrote after the helper stopped waiting.
+  let markers: string[] = []
+  try { markers = readdirSync(installDir) } catch {}
+  for (const name of markers) {
+    if (!/^confirm-[a-f0-9]{32}\.json$/.test(name)) continue
+    try {
+      const file = join(installDir, name), info = lstatSync(file)
+      if (info.isFile() && now - info.mtimeMs > STALE_STAGE_MS) rmSync(file, { force:true })
+    } catch {}
+  }
+}
+// Called once at startup. Install-confirmation launches skip it: the helper is
+// still running and owns last-result.json and the staged/backup directories.
+export function recoverUpdateInstall(confirmationLaunch: boolean) {
+  if (confirmationLaunch || process.platform !== 'darwin' || !app.isPackaged) return
+  // The install dir may not exist (e.g. quit after download); the sweep still runs.
+  const installDir = join(app.getPath('userData'), 'update-install')
+  try { desktopUpdater.restoreLastInstallResult(installDir) } catch (error) { console.warn('[opentype] update result recovery failed:', error) }
+  void sweepStaleUpdateArtifacts(installDir).catch(() => {})
+}
 export function registerUpdater(owner: () => WebContents | undefined) {
   const register = (channel: string, run: (...args: any[]) => unknown) => ipcMain.handle(channel, (event, ...args) => {
     const expected = owner()

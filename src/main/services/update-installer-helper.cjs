@@ -15,9 +15,22 @@ const log = message => {
 }
 const inside = (root, candidate) => candidate === root || candidate.startsWith(`${root}${path.sep}`)
 const exists = file => { try { fs.lstatSync(file); return true } catch { return false } }
+let resultWritten = false
 const writeResult = result => {
+  resultWritten = true
   try { fs.writeFileSync(config.resultPath, JSON.stringify({ ...result, at:new Date().toISOString() }), { mode:0o600 }) } catch {}
 }
+const sleep = ms => new Promise(resolve => setTimeout(resolve,ms))
+// The relaunched candidate gets the confirmation switches; a rolled-back old
+// app must not, otherwise it would treat itself as an install confirmation.
+const profileArgs = () => (config.relaunchArgs || []).filter(arg => arg.startsWith('--user-data-dir='))
+// Must stay longer than the app's own quit fallback (updater.ts), so the app
+// always gives up first; the app then terminates this helper before cleanup.
+const OLD_APP_EXIT_TIMEOUT_MS = 90_000
+const STARTUP_CONFIRM_TIMEOUT_MS = 120_000
+const CANDIDATE_START_TIMEOUT_MS = 30_000
+// Until the old app has exited nothing has been moved, so the app may still cancel.
+let committed = false
 const processList = () => {
   const result = spawnSync('/bin/ps', ['-axo','pid=,command='], { encoding:'utf8' })
   if (result.error || result.status !== 0) throw new Error(`无法确认更新进程状态：${result.error?.message || result.status}`)
@@ -62,14 +75,24 @@ async function run() {
   if (config.startupConfirmation && (path.dirname(config.markerPath) !== path.dirname(config.resultPath) || path.basename(config.markerPath) !== `confirm-${config.confirmToken}.json` || exists(config.markerPath))) throw new Error('启动确认文件路径无效')
   process.stdout.write('READY\n')
 
-  const deadline = Date.now() + Math.min(Math.max(config.timeoutMs || 60000,10000),120000)
-  while (Date.now() < deadline) {
-    try { process.kill(config.pid,0); await new Promise(resolve => setTimeout(resolve,250)) }
-    catch (error) { if (error.code === 'ESRCH') break; throw error }
+  const waitMs = Math.min(Math.max(Number(config.timeoutMs) || OLD_APP_EXIT_TIMEOUT_MS,OLD_APP_EXIT_TIMEOUT_MS),180_000), deadline = Date.now() + waitMs
+  let oldAppExited = false
+  while (!oldAppExited && Date.now() < deadline) {
+    try { process.kill(config.pid,0); await sleep(250) }
+    catch (error) { if (error.code === 'ESRCH') oldAppExited = true; else throw error }
   }
-  try { process.kill(config.pid,0); throw new Error('OpenType 尚未退出，已取消安装') }
-  catch (error) { if (error.code !== 'ESRCH') throw error }
+  if (!oldAppExited) {
+    try { process.kill(config.pid,0) }
+    catch (error) { if (error.code === 'ESRCH') oldAppExited = true; else throw error }
+  }
+  if (!oldAppExited) {
+    // Nothing has been moved yet and the old app is still running, so relaunch nothing.
+    log(`old app pid=${config.pid} did not exit within ${waitMs / 1000}s; install cancelled, nothing changed`)
+    writeResult({ ok:false,cancelled:true,error:'OpenType 未能在限定时间内退出，安装已取消' })
+    throw new Error('OpenType 尚未退出，已取消安装')
+  }
 
+  committed = true
   const backup = path.join(parent,`.opentype-backup-${process.pid}-${Date.now()}.app`)
   let movedOld = false, movedNew = false, launchedCandidatePid
   try {
@@ -83,8 +106,10 @@ async function run() {
     if (opened.error || opened.status !== 0) throw new Error(`新版本启动失败：${opened.error?.message || opened.status}`)
 
     if (config.startupConfirmation) {
-      const startupDeadline = Date.now() + 45_000
-      let confirmed
+      const launchedAt = Date.now(), startupDeadline = launchedAt + STARTUP_CONFIRM_TIMEOUT_MS
+      let confirmed, seenPid, lastProbe = 0
+      // null = ps failed (state unknown), undefined = no candidate process.
+      const probeCandidate = () => { try { return findCandidatePid(executable) } catch { return null } }
       while (Date.now() < startupDeadline) {
         try {
           const marker = JSON.parse(fs.readFileSync(config.markerPath,'utf8'))
@@ -95,25 +120,46 @@ async function run() {
             if (findCandidatePid(executable) === marker.pid) { confirmed = marker; break }
           }
         } catch {}
-        await new Promise(resolve => setTimeout(resolve,250))
+        // The new build may sit at a blocking keychain prompt before it can
+        // confirm; only an exited (or never started) candidate means failure.
+        if (Date.now() - lastProbe >= 1000) {
+          lastProbe = Date.now()
+          const pid = probeCandidate()
+          if (pid) seenPid = launchedCandidatePid = pid
+          else if (pid === undefined) {
+            if (seenPid) throw new Error('新版本启动后退出，正在恢复旧版本')
+            if (Date.now() - launchedAt > CANDIDATE_START_TIMEOUT_MS) throw new Error('新版本进程未启动，正在恢复旧版本')
+          }
+        }
+        await sleep(250)
       }
-      if (!confirmed) throw new Error('新版本未完成界面启动确认，正在恢复旧版本')
-      writeResult({ ok:true,version:config.version,pid:confirmed.pid,startupConfirmed:true })
-      log(`installed ${config.version}; UI loaded pid=${confirmed.pid}`)
-      try { fs.rmSync(backup,{ recursive:true,force:true }) } catch (error) { log(`old app backup retained at ${backup}: ${error.message}`) }
-      try { fs.rmSync(config.markerPath,{ force:true }) } catch {}
+      if (confirmed) {
+        writeResult({ ok:true,version:config.version,pid:confirmed.pid,startupConfirmed:true })
+        log(`installed ${config.version}; startup confirmed pid=${confirmed.pid}`)
+        try { fs.rmSync(backup,{ recursive:true,force:true }) } catch (error) { log(`old app backup retained at ${backup}: ${error.message}`) }
+        try { fs.rmSync(config.markerPath,{ force:true }) } catch {}
+      } else {
+        const probed = probeCandidate()
+        let pid = probed
+        if (probed === null && seenPid) try { process.kill(seenPid,0); pid = seenPid } catch { pid = undefined }
+        if (!pid) throw new Error('新版本未完成启动确认且已退出，正在恢复旧版本')
+        // Alive but unconfirmed (e.g. waiting on a keychain prompt): keep it
+        // running and keep the backup, like the legacy no-confirmation path.
+        writeResult({ ok:true,version:config.version,pid,startupConfirmed:false,backupPath:backup })
+        log(`installed ${config.version}; process alive but unconfirmed after ${STARTUP_CONFIRM_TIMEOUT_MS / 1000}s pid=${pid}; backup retained at ${backup}`)
+      }
     } else {
       let pid
       const startupDeadline = Date.now() + 30_000
       while (Date.now() < startupDeadline && !pid) {
         pid = findCandidatePid(executable)
-        if (!pid) await new Promise(resolve => setTimeout(resolve,250))
+        if (!pid) await sleep(250)
       }
       if (!pid) throw new Error('新版本进程未启动，正在恢复旧版本')
       const stableUntil = Date.now() + 3000
       while (Date.now() < stableUntil) {
         try { process.kill(pid,0) } catch { throw new Error('新版本进程启动后立即退出，正在恢复旧版本') }
-        await new Promise(resolve => setTimeout(resolve,250))
+        await sleep(250)
       }
       writeResult({ ok:true,version:config.version,pid,startupConfirmed:false,backupPath:backup })
       log(`installed ${config.version}; process alive pid=${pid}; backup retained at ${backup}`)
@@ -162,10 +208,16 @@ async function run() {
     try {
       if (movedNew && exists(target)) fs.rmSync(target,{ recursive:true,force:true })
       if (movedOld && exists(backup)) fs.renameSync(backup,target)
-    } catch (restoreError) { log(`rollback failed: ${restoreError.message}`) }
+    } catch (restoreError) {
+      log(`rollback failed: ${restoreError.message}`)
+      if (movedOld && exists(backup)) {
+        writeResult({ ok:false,rollbackPending:true,appPath:target,backupPath:backup,error:`${error.message}；恢复旧版本失败：${restoreError.message}` })
+        throw error
+      }
+    }
     log(`install failed: ${error.stack || error.message}`)
     writeResult({ ok:false,error:error.message })
-    if (exists(target)) spawnSync('/usr/bin/open',['-n','-a',target,'--args',...(config.relaunchArgs || [])],{ stdio:'ignore',env:guiAppEnv })
+    if (exists(target)) spawnSync('/usr/bin/open',['-n','-a',target,'--args',...profileArgs()],{ stdio:'ignore',env:guiAppEnv })
     throw error
   } finally {
     try { fs.rmSync(config.stageRoot,{ recursive:true,force:true }) } catch (error) { log(`stage cleanup failed: ${error.message}`) }
@@ -173,9 +225,21 @@ async function run() {
   }
 }
 
+// The app terminates the helper when installer startup or its own quit fallback
+// gives up; honour that only while nothing has been moved yet.
+process.on('SIGTERM', () => {
+  if (committed) return
+  log('install cancelled by the running app before it quit')
+  writeResult({ ok:false,cancelled:true,error:'应用未能正常退出，安装已取消' })
+  try { if (config?.stageRoot) fs.rmSync(config.stageRoot,{ recursive:true,force:true }) } catch {}
+  try { if (configPath) fs.rmSync(configPath,{ force:true }) } catch {}
+  process.exit(1)
+})
+
 run().catch(error => {
   log(`installer stopped: ${error.stack || error.message}`)
-  writeResult({ ok:false,error:error.message })
+  // Keep a more specific result (e.g. rollbackPending with backup paths).
+  if (!resultWritten) writeResult({ ok:false,error:error.message })
   try { if (config?.stageRoot) fs.rmSync(config.stageRoot,{ recursive:true,force:true }) } catch {}
   try { if (configPath) fs.rmSync(configPath,{ force:true }) } catch {}
   process.exitCode = 1
