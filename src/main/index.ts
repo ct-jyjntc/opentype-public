@@ -3,7 +3,8 @@
 // - 持有唯一一份原生资源句柄（数据库、FFI、窗口）
 
 import { app, BrowserWindow, dialog, ipcMain, screen, Tray, Menu, nativeImage, shell, systemPreferences, safeStorage, utilityProcess, powerMonitor } from 'electron'
-import { join, basename } from 'node:path'
+import { join, basename, relative, isAbsolute } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { existsSync, mkdirSync } from 'node:fs'
 import { readFile, writeFile, stat } from 'node:fs/promises'
 import { serviceRequest as request } from './services/network'
@@ -12,6 +13,7 @@ import { InputHelper, InputDelivery, InputObservation, ContextHelper, UtilHelper
 import { HotkeyStateMachine, parseShortcutString, type HotkeyBinding } from './services/hotkey'
 import { ShortcutCapture, focusedKeyEvent } from './services/shortcut-capture'
 import { CaptureSession } from './services/capture-session'
+import { jsonObject } from './services/voice-context'
 import { dispatchRecordingHotkey, reconcileCaptureState, bindRecordingPowerEvents } from './services/recording-controls'
 import { registerDesktop, readPreferences } from './services/desktop'
 import { resolveSkill } from '../shared/skills'
@@ -417,10 +419,28 @@ const floatingBarPreferences = () => readFloatingBar(((store?.get('app-settings'
 /** All shipping windows load the same source-built renderer and explicit preload. */
 function rendererRoot(): string { return join(__dirname, '../renderer') }
 function rendererPreload(): string { return join(__dirname, '../preload/index.js') }
-function loadRenderer(win: BrowserWindow, page: string): void {
+function rendererDevUrl(): string | undefined {
   const devUrl = !app.isPackaged ? process.env.OPENTYPE_RENDERER_URL : undefined
-  if (devUrl && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(devUrl)) void win.loadURL(`${devUrl}/${page}`)
+  return devUrl && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(devUrl) ? devUrl : undefined
+}
+function loadRenderer(win: BrowserWindow, page: string): void {
+  const devUrl = rendererDevUrl()
+  if (devUrl) void win.loadURL(`${devUrl}/${page}`)
   else void win.loadFile(join(rendererRoot(), page))
+}
+/** Privileged windows may only show the app's own renderer pages (file:// build, or the dev server origin). */
+function isAppRendererUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw)
+    const devUrl = rendererDevUrl()
+    if (devUrl) return url.origin === new URL(devUrl).origin
+    if (url.protocol !== 'file:') return false
+    // fileURLToPath throws on remote hosts (file://evil.com/…) and encoded separators; treated as foreign.
+    const path = relative(rendererRoot(), fileURLToPath(url))
+    return path !== '' && !path.startsWith('..') && !isAbsolute(path)
+  } catch {
+    return false
+  }
 }
 
 /** 外部链接统一交系统浏览器，应用内不弹新窗口（浮窗/卡片里的链接同理）。 */
@@ -800,6 +820,7 @@ function createSyncEngine(): SyncEngine {
     markFailed: async (ids: string[]) => {
       await HistoryRepo.markSyncFailed(ids)
     },
+    releasePushed: ids => HistoryRepo.releasePushedVersions(ids),
     loadPendingDeletions: (userId, limit, retryFailed) => HistoryRepo.pendingCloudDeletions(account(userId), limit, retryFailed),
     countPendingDeletions: userId => HistoryRepo.cloudDeletionCount(account(userId)),
     markDeletions: (userId, ids, acknowledged) => HistoryRepo.markCloudDeletions(account(userId), ids, acknowledged),
@@ -1092,13 +1113,14 @@ function broadcastGlobalKeyboard(ev: KeyEvent): void {
 const shortcutCapture = new ShortcutCapture()
 let powerLifecycle: ReturnType<typeof bindRecordingPowerEvents> | undefined
 
-function cancelRecordingControls() {
+function cancelRecordingControls(options: { keepDictation?: boolean } = {}) {
   selectionCapture?.abort(); selectionCapture = undefined
   selectionActions?.close()
   inputCorrections.stop()
   lastPaste?.abort()
   hotkeys.reset()
-  pipeline?.onCancel()
+  if (options.keepDictation) pipeline?.interrupt()
+  else pipeline?.onCancel()
   pressedKeys.clear()
   shortcutCapture.end()
 }
@@ -1114,8 +1136,8 @@ function startKeyboardMonitor(): number {
 }
 
 /** 快捷键变更后重载：重读有效绑定，再重启监听。 */
-function reloadKeyboardShortcuts(): void {
-  cancelRecordingControls()
+function reloadKeyboardShortcuts(options: { keepDictation?: boolean } = {}): void {
+  cancelRecordingControls(options)
   hotkeys.setBindings(activeBindings())
   // 清掉按下快照：stop/start 间隙可能丢 keyUp，留着会让渲染层误以为键还按着
   pressedKeys.clear()
@@ -2122,6 +2144,17 @@ app.setPath('userData', profile.userData)
 app.setPath('logs', profile.logs)
 app.setPath('sessionData', profile.userData)
 
+// Every webContents (main, bar, card, settings): no navigation away from the app's own pages
+// (e.g. a link dropped onto a window) and no <webview>. Subframes such as Turnstile are unaffected.
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('will-navigate', (event, url) => {
+    let allowed = false
+    try { allowed = isAppRendererUrl(url) } catch { allowed = false }
+    if (!allowed) event.preventDefault()
+  })
+  contents.on('will-attach-webview', event => event.preventDefault())
+})
+
 // 单实例锁：深链接需要交给已运行实例处理，否则会新开进程导致登录态分裂
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -2162,6 +2195,7 @@ if (gotLock) app.whenReady().then(async () => {
   seedFeatureShortcutBindings()
 
   initDatabase(join(app.getPath('userData'), 'db'))
+  HistoryRepo.setOwnerResolver(() => auth.userId ? { userId: auth.userId, serverUrl: syncScope(getConfig().cloudBaseUrl) } : null)
   const previousAccountScope = store?.get('accountBackendMigrationScope' as never) as unknown
   if (typeof previousAccountScope === 'string' && previousAccountScope) {
     HistoryRepo.preserveLegacyCloudScope(previousAccountScope)
@@ -2205,6 +2239,9 @@ if (gotLock) app.whenReady().then(async () => {
 
   const preferences=readPreferences((store?.get('app-settings' as never)??{}) as Record<string,unknown>)
   const { nativeTheme }=await import('electron');nativeTheme.themeSource=preferences.appearance
+  // 「在 Dock 中显示应用」只在切换时生效的话重启后会失效；启动时按保存值恢复。
+  // 打开窗口的路径（托盘、activate、快捷键）都不会强制 app.dock.show()，以该偏好为准。
+  if (process.platform === 'darwin' && app.dock && !preferences.showInDock) app.dock.hide()
   registerIpc()
   barWindow = createBarWindow()
   barPositioner = new FloatingBarPositioner(barWindow, floatingBarPreferences, floatingBar => {
@@ -2251,8 +2288,10 @@ if (gotLock) app.whenReady().then(async () => {
   }
 
   powerLifecycle = bindRecordingPowerEvents(powerMonitor, {
-    suspend: () => { cancelRecordingControls(); KeyboardHelper.stopMonitor() },
-    resume: () => reloadKeyboardShortcuts(),
+    // Sleep/lock only ends live microphone capture; finished or in-flight dictation still lands in history.
+    suspend: () => { cancelRecordingControls({ keepDictation: true }); KeyboardHelper.stopMonitor() },
+    // Resume/unlock must never abort a session that already stopped and is still transcribing/refining.
+    resume: () => reloadKeyboardShortcuts({ keepDictation: true }),
   })
   deepLinksReady = true
   const startupLink = pendingDeepLink ?? process.argv.find(argument => argument.startsWith('opentype://'))

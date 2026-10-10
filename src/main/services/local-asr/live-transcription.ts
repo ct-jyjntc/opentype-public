@@ -2,7 +2,15 @@ import { encodeWav } from '../pcm'
 import { PauseSegmenter } from './pause-segmenter'
 import { joinTranscripts } from './segments'
 
-type Segment = { samples?: Float32Array; text?: string; error?: string }
+type Segment = { samples?: Float32Array; text?: string; error?: string; tail?: boolean; length: number }
+/** A sub-second remainder flushed at stop is usually breath or key noise that providers reject. */
+const DROPPABLE_TAIL_SAMPLES = 16000
+/**
+ * Only "no usable speech" outcomes may drop that tail: SiliconFlow 400/413/422 rejection,
+ * undecodable/empty segment audio (audio-decode, SenseVoice worker). Rate-limit, balance,
+ * network, timeout and crash errors still fail the recording so the last word is never lost.
+ */
+const NO_SPEECH_ERRORS = new Set(['siliconflow_audio_rejected', 'invalid_audio', 'empty_audio', 'empty_transcription'])
 export interface SegmentRecognizer {
   transcribe(audio: Uint8Array, signal?: AbortSignal): Promise<{ text?: string; error?: string }>
 }
@@ -13,6 +21,7 @@ export class LiveLocalTranscription {
   private work = Promise.resolve()
   private segmenter = new PauseSegmenter(samples => this.enqueue(samples))
   private sealed = false
+  private flushing = false
   private disposed = false
   private controller = new AbortController()
   private result?: Promise<{ text?: string; error?: string }>
@@ -32,7 +41,7 @@ export class LiveLocalTranscription {
   }
 
   private enqueue(samples: Float32Array) {
-    const segment: Segment = { samples }
+    const segment: Segment = { samples, length: samples.length, tail: this.flushing }
     this.segments.push(segment)
     this.work = this.work.then(() => this.recognize(segment))
   }
@@ -66,7 +75,8 @@ export class LiveLocalTranscription {
   seal() {
     if (this.sealed || this.disposed) return
     this.sealed = true
-    this.segmenter.flush()
+    this.flushing = true
+    try { this.segmenter.flush() } finally { this.flushing = false }
   }
 
   private async complete(): Promise<{ text?: string; error?: string }> {
@@ -79,9 +89,18 @@ export class LiveLocalTranscription {
     for (const segment of this.segments) {
       if (segment.error && this.shouldRetry(segment.error)) await this.recognize(segment)
       if (this.disposed || this.signal.aborted) return { error: 'cancelled' }
+      if (segment.error && this.droppableTail(segment)) { segment.error = undefined; segment.text = ''; continue }
       if (segment.error) return { error: segment.error }
     }
     return { text: joinTranscripts(this.segments.map(segment => segment.text ?? '')) }
+  }
+
+  /** Only the final sub-second stop remainder may fail quietly, and only when earlier speech was recognized. */
+  private droppableTail(segment: Segment) {
+    return segment.tail === true && segment === this.segments[this.segments.length - 1]
+      && !!segment.error && NO_SPEECH_ERRORS.has(segment.error)
+      && segment.length < DROPPABLE_TAIL_SAMPLES
+      && this.segments.some(item => item !== segment && !!item.text)
   }
 
   dispose() {

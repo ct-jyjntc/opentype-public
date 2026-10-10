@@ -2,11 +2,16 @@ import { join } from 'node:path'
 import { audioSegments, joinTranscripts } from './segments'
 import { decodeLocalAudio } from './audio-decode'
 
-type Work = { id: number; modelDir: string; audio: Uint8Array }
+type Work = { id: number; modelDir: string; audio: Uint8Array; language?: string }
+/** SenseVoice language ids; anything else falls back to automatic detection. */
+const SENSEVOICE_LANGUAGES = new Set(['auto', 'zh', 'en', 'ja', 'ko', 'yue'])
 type Port = { on(event: 'message', fn: (event: { data: Work }) => void): void; postMessage(value: unknown): void }
 const port = (process as NodeJS.Process & { parentPort?: Port }).parentPort
 const send = (value: unknown) => port ? port.postMessage(value) : process.send?.(value)
+// The language is fixed at recognizer creation, so keep one recognizer and rebuild
+// it only when the requested language changes (live segments reuse the same one).
 let recognizer: any
+let recognizerLanguage = ''
 let busy = false
 
 async function run(message: Work) {
@@ -18,11 +23,14 @@ async function run(message: Work) {
     let energy = 0
     for (const sample of wave.samples) energy += sample * sample
     if (energy / wave.samples.length < 1e-10) { send({ id: message.id, text: '' }); return }
-    if (!recognizer) {
+    const language = SENSEVOICE_LANGUAGES.has(String(message.language)) ? String(message.language) : 'auto'
+    if (!recognizer || recognizerLanguage !== language) {
       const sherpa = require('sherpa-onnx-node')
+      recognizer = undefined
       recognizer = new sherpa.OfflineRecognizer({ featConfig: { sampleRate: 16000, featureDim: 80 },
-        modelConfig: { senseVoice: { model: join(message.modelDir, 'model.int8.onnx'), language: 'auto', useInverseTextNormalization: 1 },
+        modelConfig: { senseVoice: { model: join(message.modelDir, 'model.int8.onnx'), language, useInverseTextNormalization: 1 },
           tokens: join(message.modelDir, 'tokens.txt'), numThreads: 2, provider: 'cpu', debug: 0 } })
+      recognizerLanguage = language
     }
     const parts: string[] = []
     for (const samples of audioSegments(wave.samples, wave.sampleRate)) {

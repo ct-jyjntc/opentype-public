@@ -71,6 +71,20 @@ export class SecureConfigStore {
     this.backend.set(encoded)
   }
 
+  /** True when a persisted secret exists but cannot be decrypted now (get() then returns the empty value,
+   *  which is indistinguishable from "missing"). Callers must not write back over such a value. */
+  isUndecryptable(key: string): boolean {
+    if (this.sessionValues.has(key) || !this.isPersistedSecret(key)) return false
+    const value = this.backend.store[key] as Envelope
+    try {
+      if (!this.available()) return true
+      JSON.parse(this.encryption.decryptString(Buffer.from(value.ciphertext, 'base64')))
+      return false
+    } catch {
+      return true
+    }
+  }
+
   isPersistedSecret(key: string): boolean {
     return PROTECTED_KEYS.has(key) && !this.sessionValues.has(key) && isEnvelope(this.backend.store[key])
   }

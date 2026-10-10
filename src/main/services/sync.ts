@@ -72,6 +72,8 @@ export interface SyncEngineOptions {
   markSynced: (ids: string[]) => Promise<void>
   /** 标记同步失败（累加尝试次数） */
   markFailed: (ids: string[]) => Promise<void>
+  /** Release per-push bookkeeping for these ids (every outcome), or for everything when omitted. */
+  releasePushed?: (ids?: string[]) => void
   /** 把拉取到的记录写入本地 */
   applyRemote: (records: SyncRecord[], userId: string) => Promise<void>
   loadPendingDeletions?: (userId: string, limit: number, retryFailed: boolean) => string[]
@@ -253,8 +255,10 @@ export class SyncEngine {
         const pending = await this.options.loadPendingRecords(session.userId, MAX_PUSH_BATCH, retryFailed)
         if (!this.isCurrent(session)) return result
         if (pending.length === 0) break
-        if (pending.some(r => processed.has(r.id))) throw new Error('sync_queue_did_not_advance')
-        for (const record of pending) processed.add(record.id)
+        // A record edited while its push was in flight legitimately returns with new content;
+        // only an identical snapshot coming back means the queue is stuck.
+        if (pending.some(r => processed.has(JSON.stringify(r)))) throw new Error('sync_queue_did_not_advance')
+        for (const record of pending) processed.add(JSON.stringify(record))
         unacknowledged = pending.map(r => r.id)
         result.pushed += pending.length
         this.notify('pushing', undefined, result.pushed, result.accepted)
@@ -276,6 +280,8 @@ export class SyncEngine {
           if (!this.isCurrent(session)) return result
         }
         if (accepted.length || skipped.length) await this.options.markSynced([...accepted, ...skipped])
+        // Rejected ids (record_deleted, cloud_record_evicted, invalid_*) are never marked synced; release them too.
+        this.options.releasePushed?.([...ids])
         if (!this.isCurrent(session)) return result
         result.accepted += accepted.length
         const acknowledged = new Set([...accepted, ...skipped, ...deleted, ...evicted])
@@ -302,6 +308,8 @@ export class SyncEngine {
       }
       return result
     } finally {
+      // Pushes are exclusive: nothing from this run (including a batch abandoned on session change) is still in flight.
+      this.options.releasePushed?.()
       this.pushing = false
     }
   }

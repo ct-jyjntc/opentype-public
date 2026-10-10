@@ -242,7 +242,8 @@ export class CaptureSession {
       s.live?.seal()
       duration = s.samples / s.sampleRate
       if (s.samples === 0) {
-        notify(s.captureWarning ? 'error' : 'cancelled', s.captureWarning ? 'microphone_disconnected' : 'empty_audio')
+        const disconnected = s.captureWarning === 'microphone_disconnected_saved'
+        notify(disconnected ? 'error' : 'cancelled', disconnected ? 'microphone_disconnected' : 'empty_audio')
         return null
       }
       notify('encoding')
@@ -382,6 +383,19 @@ export class CaptureSession {
       if (saved) this.deps.changed()
       if (this.session === s) this.session = null
     }
+  }
+  /**
+   * Sleep / screen lock: release the microphone without discarding the user's words.
+   * Startup has no audio yet and is cancelled; a live recording stops and processes what
+   * was captured (like a disconnected microphone); a session that already stopped
+   * recording finishes into history on its own.
+   */
+  interrupt() {
+    if (this.starting) { this.onCancel(); return }
+    const s = this.session
+    if (!s || s.stopping) return
+    s.captureWarning ??= 'recording_interrupted_saved'
+    void this.onStop()
   }
   onCancel() {
     const pending = this.starting

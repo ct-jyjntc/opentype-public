@@ -14,7 +14,8 @@ export class LocalAsrProcess {
   constructor(private readonly spawn: () => AsrChild, private readonly modelDir: string,
     private readonly timeoutMs = 30_000, private readonly idleMs = 120_000) {}
 
-  transcribe(audio: Uint8Array, signal?: AbortSignal): Promise<{ text?: string; error?: string }> {
+  /** `language` is a SenseVoice id (auto/zh/en/ja/ko/yue); the worker falls back to auto. */
+  transcribe(audio: Uint8Array, signal?: AbortSignal, language = 'auto'): Promise<{ text?: string; error?: string }> {
     if (signal?.aborted) return Promise.resolve({ error: 'cancelled' })
     if (this.current) return Promise.resolve({ error: 'local_asr_busy' })
     clearTimeout(this.idle)
@@ -51,7 +52,7 @@ export class LocalAsrProcess {
         })
       }
       signal?.addEventListener('abort', abort, { once: true })
-      try { child.postMessage({ id, modelDir: this.modelDir, audio }) }
+      try { child.postMessage({ id, modelDir: this.modelDir, audio, language }) }
       catch { this.stop(); finish({ error: 'local_asr_failed' }) }
     })
   }

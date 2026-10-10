@@ -13,11 +13,12 @@ public func freeString(_ ptr: UnsafeMutablePointer<CChar>?) {
 }
 
 /// 检查辅助功能权限。语音输入法没有这个权限就无法监听热键、无法注入文本。
-/// 注意：kAXTrustedCheckOptionPrompt 必须传 true，否则系统不会弹出授权引导。
+/// 只查询、不弹窗：状态 IPC 每次窗口聚焦都会调用，带 Prompt 会反复弹系统授权框。
+/// 需要引导授权的路径（启动、device:request-accessibility）由 Electron 的
+/// isTrustedAccessibilityClient(true) 负责弹窗。
 @_cdecl("checkAccessibilityPermission")
 public func checkAccessibilityPermission() -> Int32 {
-    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-    return AXIsProcessTrustedWithOptions(options) ? 1 : 0
+    return AXIsProcessTrusted() ? 1 : 0
 }
 
 /// 麦克风权限状态：0=未决定 1=受限 2=拒绝 3=已授权

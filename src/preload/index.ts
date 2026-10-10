@@ -187,6 +187,19 @@ const api = {
   platform: process.platform
 }
 
-if (process.isMainFrame) contextBridge.exposeInMainWorld('opentype', api)
+/** Defense in depth: only the app's own pages (packaged file://, or the local dev server) get the API. */
+function isAppOrigin(): boolean {
+  if (location.protocol === 'file:') {
+    // Packaged/built pages load via loadFile(<app>/dist/renderer/<page>) — also inside app.asar.
+    if (location.host !== '' || /%(2f|5c)/i.test(location.pathname)) return false
+    let path: string
+    try { path = decodeURIComponent(location.pathname) } catch { return false }
+    if (path.split(/[\\/]/).includes('..')) return false
+    return /\/dist\/renderer\/[^/]+/.test(path)
+  }
+  return location.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(location.hostname) && location.port !== ''
+}
+
+if (process.isMainFrame && isAppOrigin()) contextBridge.exposeInMainWorld('opentype', api)
 
 export type OpenTypeApi = typeof api

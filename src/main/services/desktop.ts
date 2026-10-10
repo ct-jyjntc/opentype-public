@@ -107,11 +107,16 @@ export function registerDesktop(
         const optional = ['pasteLastTranscript','selectionActions'].includes(key)
         const list = patch.featureShortcutBindings[key] ?? (optional ? [] : undefined)
         if (!Array.isArray(list) || list.length > 3 || (!optional && !list.length)) throw new Error('invalid_shortcut')
+        // Bindings already saved for this feature pass through unchanged (e.g. a legacy Shift+letter),
+        // so tightened rules only reject new or changed shortcuts instead of blocking every save.
+        const savedList: unknown = old.featureShortcutBindings[key]
+        const saved = Array.isArray(savedList) ? savedList : []
         for (const shortcut of list) {
           const b = typeof shortcut === 'string' ? parseShortcutString(shortcut) : null
-          if (!b || !validateShortcut(b).valid
+          const unchanged = !!b && typeof shortcut === 'string' && saved.includes(shortcut)
+          if (!b || (!unchanged && (!validateShortcut(b).valid
             || !/^(Fn|F[1-9]|F1[0-2]|[A-Z0-9]|Space|Shift|Command|Control|Option)$/.test(b.key)
-            || (!b.modifiers.length && !/^(Fn|F\d{1,2})$/.test(b.key) && b.keyCode === undefined)) throw new Error('invalid_shortcut')
+            || (!b.modifiers.length && !/^(Fn|F\d{1,2})$/.test(b.key) && b.keyCode === undefined)))) throw new Error('invalid_shortcut')
           const modifierOnly = ['Fn','Shift','Command','Control','Option'].includes(b.key)
           const signature = modifierOnly ? [b.keyCode ?? '', ...[b.key, ...b.modifiers].sort()].join('+')
             : [b.key, ...[...b.modifiers].sort()].join('+')

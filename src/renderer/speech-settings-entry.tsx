@@ -1,4 +1,9 @@
 import { createRoot } from 'react-dom/client'
 import { SpeechSettings } from './speech-settings'
+import { useSyncedTheme } from './theme'
 import './app.css'
-createRoot(document.getElementById('root')!).render(<SpeechSettings />)
+function SpeechSettingsWindow() {
+  useSyncedTheme()
+  return <SpeechSettings />
+}
+createRoot(document.getElementById('root')!).render(<SpeechSettingsWindow />)

@@ -83,6 +83,33 @@ private let modifierMaskForKeyCode: [Int64: CGEventFlags] = [
     0x3B: .maskControl, 0x3E: .maskControl       // 左/右 Control
 ]
 
+/// 物理修饰键 → 设备相关的左右侧位（NX_DEVICE*KEYMASK）。左右键共用一个通用 mask，
+/// 只看通用位会把"按住右 Cmd 再按左 Cmd 后松开右 Cmd"误判成按下，右侧永远收不到 keyUp。
+private let deviceSideMaskForKeyCode: [Int64: UInt64] = [
+    0x3B: 0x00000001, 0x3E: 0x00002000,     // 左/右 Control
+    0x38: 0x00000002, 0x3C: 0x00000004,     // 左/右 Shift
+    0x37: 0x00000008, 0x36: 0x00000010,     // 左/右 Command
+    0x3A: 0x00000020, 0x3D: 0x00000040      // 左/右 Option
+]
+
+/// 同一修饰键族全部侧位，用于判断事件是否携带设备相关位。
+private let deviceFamilyMask: [UInt64: UInt64] = [
+    CGEventFlags.maskControl.rawValue: 0x00000001 | 0x00002000,
+    CGEventFlags.maskShift.rawValue: 0x00000002 | 0x00000004,
+    CGEventFlags.maskCommand.rawValue: 0x00000008 | 0x00000010,
+    CGEventFlags.maskAlternate.rawValue: 0x00000020 | 0x00000040
+]
+
+/// flagsChanged 方向：优先看左右侧位；合成事件可能完全不带侧位，此时退回通用 mask。
+private func modifierPressed(_ keyCode: Int64, mask: CGEventFlags, flags: CGEventFlags) -> Bool {
+    guard let side = deviceSideMaskForKeyCode[keyCode],
+          let family = deviceFamilyMask[mask.rawValue],
+          flags.rawValue & family != 0 else {
+        return flags.contains(mask)
+    }
+    return flags.rawValue & side != 0
+}
+
 /// 事件回调：把按下/松开事件序列化成 JSON 交给 JS 侧匹配热键。
 private let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     // A disabled-tap notification carries no usable keyboard event. Re-enable the
@@ -115,7 +142,7 @@ private let tapCallback: CGEventTapCallBack = { _, type, event, _ in
             return Unmanaged.passUnretained(event)  // CapsLock 等不关心
         }
         keyCode = Int32(rawKeyCode)
-        let pressed = event.flags.contains(mask)
+        let pressed = modifierPressed(rawKeyCode, mask: mask, flags: event.flags)
         if rawKeyCode == 0x3F { physicalFnPressed = pressed }
         // 修饰键列表要排除自己（组合键语义：主键按下时 modifiers 是"同时按住的其它键"）
         var mods = event.flags
@@ -308,12 +335,17 @@ public func getKeyboardDeviceList() -> UnsafeMutablePointer<CChar>? {
                     IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?
                         .takeRetainedValue() as? String
                 }
+                // VendorID/ProductID 在 IORegistry 里是 CFNumber，按 String 取永远为空
+                func numProp(_ key: String) -> String? {
+                    (IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?
+                        .takeRetainedValue() as? NSNumber).map { String($0.intValue) }
+                }
                 if let usagePage = IORegistryEntryCreateCFProperty(service, "PrimaryUsagePage" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? Int,
                    usagePage == 1 {
                     devices.append([
                         "name": prop("Product") ?? "Unknown",
-                        "vendorId": prop("VendorID") ?? "",
-                        "productId": prop("ProductID") ?? ""
+                        "vendorId": numProp("VendorID") ?? "",
+                        "productId": numProp("ProductID") ?? ""
                     ])
                 }
             }

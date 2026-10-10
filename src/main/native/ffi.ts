@@ -75,7 +75,7 @@ function consume(ptr: unknown): string | null {
 
 export const InputHelper = {
   restoreClipboard() { _restoreNativeClipboard?.() },
-  captureTarget(allowReadOnlySelection = false, traceId = randomUUID()): InputSnapshot {
+  captureTarget(allowReadOnlySelection = false, traceId: string = randomUUID()): InputSnapshot {
     recordInputDiagnostic(traceId, 'capture-start')
     try {
       const raw = consume(allowReadOnlySelection ? _captureCommandTarget() : _captureInputTarget())
@@ -251,7 +251,7 @@ export interface AudioDevice {
 }
 
 export const UtilHelper = {
-  /** 触发辅助功能授权引导并返回当前状态。 */
+  /** 只返回辅助功能授权状态，不弹窗（弹窗走 systemPreferences.isTrustedAccessibilityClient(true)）。 */
   checkAccessibilityPermission(): boolean {
     return (_checkAccessibilityPermission() as number) === 1
   },

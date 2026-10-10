@@ -142,7 +142,7 @@ function General({
         </Row>
       ))}
       <h3 className="section-heading">语言</h3>
-      <Row title="识别语言" description="选择自动检测或指定说话的语言。">
+      <Row title="识别语言" description={config?.provider === 'siliconflow' ? '云端 SiliconFlow 始终自动识别语言，此项对它不生效。' : '选择自动检测或指定说话的语言。'}>
         <select
           aria-label="识别语言"
           value={
@@ -365,6 +365,20 @@ function Personal({
   const [expression, setExpression] = useState<ExpressionStyle>('casual')
   const [savingRule, setSavingRule] = useState(false)
   useEffect(() => { void api.desktop.writingApps().then(setApps).catch(() => {}) }, [])
+  // 语气与写作偏好只在文字整理（DeepSeek）可用时生效；状态来自听写设置的 config
+  const [refineReady, setRefineReady] = useState<boolean>()
+  useEffect(() => {
+    let active = true
+    const apply = (c: { enableRefine?: boolean; hasRefineApiKey?: boolean } | null | undefined) => {
+      if (active && c) setRefineReady(!!c.enableRefine && !!c.hasRefineApiKey)
+    }
+    const off = api.config.onChanged(apply)
+    void api.config.get().then(apply).catch(() => {})
+    return () => { active = false; off() }
+  }, [])
+  const styleOff = !p.usePersonalStyle
+  const styleHint = styleOff ? '已关闭「启用语气与写作偏好」，以下设置暂不生效。'
+    : refineReady === false ? '文字整理未开启或未填写 DeepSeek API Key，以下设置暂不生效。' : ''
   const updateRule = async () => {
     const app = apps.find(a => a.bundleId === selectedApp)
     if (!app) return
@@ -396,7 +410,7 @@ function Personal({
       </Row>
       <Row
         title="启用语气与写作偏好"
-        description="需要开启文字整理"
+        description={refineReady === false ? '需要开启文字整理并填写 DeepSeek API Key（听写设置）' : '需要开启文字整理'}
       >
         <Toggle
           label="启用语气与写作偏好"
@@ -410,31 +424,34 @@ function Personal({
           {EXPRESSIONS.map(([key, label]) => <option value={key} key={key}>{label}</option>)}
         </select>
       </Row>
-      <div className="app-expression-card">
+      <div className={`app-expression-card${styleOff ? ' is-disabled' : ''}`}>
         <h2>按应用选择表达方式</h2>
         <p className="muted">比如微信用口语，邮件用正式表达。</p>
+        {styleHint && <p className="muted setting-hint">{styleHint}</p>}
         <div className="app-expression-controls">
-          <label className="field">应用<select aria-label="应用表达规则的应用" value={selectedApp} onChange={e => setSelectedApp(e.target.value)}>
+          <label className="field">应用<select aria-label="应用表达规则的应用" disabled={styleOff} value={selectedApp} onChange={e => setSelectedApp(e.target.value)}>
             {apps.map(a => <option key={a.bundleId} value={a.bundleId}>{a.appName}</option>)}
           </select></label>
-          <label className="field">表达方式<select aria-label="应用表达规则的语气" value={expression} onChange={e => setExpression(e.target.value as ExpressionStyle)}>
+          <label className="field">表达方式<select aria-label="应用表达规则的语气" disabled={styleOff} value={expression} onChange={e => setExpression(e.target.value as ExpressionStyle)}>
             {EXPRESSIONS.map(([key, label]) => <option value={key} key={key}>{label}</option>)}
           </select></label>
-          <button disabled={savingRule || (!p.appExpressions.some(a => a.bundleId === selectedApp) && p.appExpressions.length >= 50)} onClick={() => void updateRule()}>保存应用规则</button>
+          <button disabled={styleOff || savingRule || (!p.appExpressions.some(a => a.bundleId === selectedApp) && p.appExpressions.length >= 50)} onClick={() => void updateRule()}>保存应用规则</button>
         </div>
         {p.appExpressions.map(rule => <Row key={rule.bundleId} title={rule.appName} description={EXPRESSIONS.find(([key]) => key === rule.expression)?.[1]}>
           <button aria-label={`移除${rule.appName}的表达规则`} onClick={() => void save({ appExpressions: p.appExpressions.filter(a => a.bundleId !== rule.bundleId) })}>恢复默认</button>
         </Row>)}
         
       </div>
-      <div className="personal-card">
+      <div className={`personal-card${styleOff ? ' is-disabled' : ''}`}>
         <Icon name="spark" size={32} />
         <h2>让文字更像您</h2>
         <p>告诉它你习惯怎么写。</p>
+        {styleHint && <p className="setting-hint">{styleHint}</p>}
         <label className="field">
           写作偏好
           <textarea
             rows={6}
+            disabled={styleOff}
             value={style}
             maxLength={1200}
             onChange={(e) => setStyle(e.target.value)}
@@ -443,6 +460,7 @@ function Personal({
         </label>
         <button
           className="primary"
+          disabled={styleOff}
           onClick={() => void save({ personalStyle: style })}
         >
           保存偏好

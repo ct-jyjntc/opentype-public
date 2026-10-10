@@ -152,15 +152,15 @@ export class AuthService {
     const pending = this.pendingLogin
     if (!pending) return { success: false, detail: 'no_pending_login' }
 
+    // state 不匹配只拒绝本次请求：任何本机进程都能请求回调端口，
+    // 若在此清空 pending，等于允许任意本地请求取消进行中的登录。
+    if (state !== pending.state) {
+      return { success: false, detail: 'state_mismatch' }
+    }
+
     if (Date.now() - pending.createdAt > PENDING_LOGIN_TTL_MS) {
       this.pendingLogin = null
       return { success: false, detail: 'pending_login_expired' }
-    }
-
-    // state 不匹配直接作废，且清空 pending 防止重放
-    if (state !== pending.state) {
-      this.pendingLogin = null
-      return { success: false, detail: 'state_mismatch' }
     }
 
     try {

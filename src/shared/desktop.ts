@@ -270,11 +270,44 @@ export function errorMessage(error: unknown): string {
     answer_selection_save_failed: '尚未替换原文，交付状态未能保存；回答仍可复制',
     answer_record_changed: '回答的历史记录已改变或删除，未替换原文；回答仍可复制',
     answer_recording_busy: '正在录音或处理，请结束后再点击替换；回答仍可复制',
+    recording_interrupted_saved: '锁屏或睡眠时已停止录音，并处理此前收到的内容',
+    local_asr_unavailable: '本地识别引擎无法启动，请检查应用安装或到听写设置中修复模型',
+    local_asr_timeout: '本地识别响应超时，请重试',
+    local_asr_crashed: '本地识别引擎意外退出，请重试',
+    local_asr_failed: '本地识别失败，请重试',
+    invalid_audio: '录音数据无法读取，请重新录音',
+    unsupported_audio_format: '不支持这种录音格式，请重新录音',
+    transcription_failed: '识别失败，请重试',
+    already_retrying: '这条记录正在重新识别，请稍候',
+    record_not_found: '找不到这条记录，可能已被删除',
+    injection_bridge_error: '输入组件返回异常，请核对输入框；文字已保存',
+    invalid_refine_endpoint: '文字整理服务地址无效，请使用 DeepSeek 官方地址；原始文字已保留',
+    missing_output_language: '请先选择翻译的目标语言',
+    output_language_required: '请先选择翻译的目标语言',
+    invalid_refinement_setup: '文字整理配置无效，请到听写设置重新填写',
+    refinement_key_not_persisted: '文字整理密钥未能安全保存，请到听写设置重新填写',
+    key_store_unavailable: '系统安全存储暂不可用，无法读写密钥',
+    invalid_retention: '保留时间无效，请重新选择',
+    invalid_config: '设置内容无效，请检查后重试',
+    not_authenticated: '请先登录账号',
+    no_pending_login: '没有进行中的登录，请重新登录',
+    pending_login_expired: '登录请求已过期，请重新登录',
+    state_mismatch: '登录校验未通过，请重新登录',
+    download_failed: '模型下载失败，请检查网络后重试',
+    download_redirect_failed: '下载地址重定向异常，请稍后重试',
+    insecure_download_url: '下载地址不安全，已停止下载',
+    invalid_model_size: '模型文件大小不符，请重新下载',
+    model_checksum_failed: '模型文件校验失败，请重新下载',
+    bundled_model_checksum_failed: '内置模型文件校验失败，请到听写设置中修复模型或重新安装 OpenType',
+    model_write_failed: '模型文件写入失败，请检查磁盘空间后重试',
   }
-  return (
-    Object.entries(messages).find(([key]) => raw.includes(key))?.[1] ??
-    (raw || '操作失败，请重试')
-  )
+  // Exact code first; otherwise the most specific (longest) code contained in the message,
+  // so `injection_cancelled_after_send` never resolves to `cancelled`.
+  if (Object.hasOwn(messages, raw)) return messages[raw]
+  const key = Object.keys(messages)
+    .filter(candidate => raw.includes(candidate))
+    .reduce<string | undefined>((best, candidate) => (!best || candidate.length > best.length ? candidate : best), undefined)
+  return key ? messages[key] : (raw || '操作失败，请重试')
 }
 
 export interface KeyboardMonitorStatus {

@@ -24,6 +24,18 @@ let db: ReturnType<typeof drizzle> | null = null
 let raw: Database.Database | null = null
 let dictionarySyncStore: DictionarySyncStore | undefined
 let activeDictionaryScope='local'
+/** Account logged in when a history row is first created; null while logged out. */
+let historyOwner: () => HistorySyncAccount | null = () => null
+/** Pushed-content fingerprints captured by pendingSyncForApi, consumed by markSynced/markSyncFailed. */
+const pushedVersions = new Map<string, string>()
+/** Defensive cap: entries are normally consumed by the push response within one batch. */
+const MAX_PUSHED_VERSIONS = 1000
+/** sync_failed rows stop being retried automatically after this many attempts (see pendingSync). */
+const MAX_SYNC_ATTEMPTS = 3
+function pushVersion(row: HistoryRow): string {
+  return JSON.stringify([row.updatedAt, row.status, row.mode, row.refinedText, row.duration, row.createdAt,
+    row.audioMetadata, row.appVersion, row.micDevice, row.modeMeta, row.audioContext])
+}
 export function getDictionarySyncStore(){if(!dictionarySyncStore)throw new Error('database not initialized');return dictionarySyncStore}
 
 /**
@@ -250,6 +262,9 @@ function removeRows(rows: Array<{ id: string }>): number {
 }
 
 export const HistoryRepo = {
+  /** New rows created while an account is logged in belong to it, so another account never claims them. */
+  setOwnerResolver(resolve: () => HistorySyncAccount | null): void { historyOwner = resolve },
+
   /**
    * 渲染层是分批 patch 写入（先建占位、再补模式/元数据/状态），
    * 所以冲突时必须更新「本次实际提供的字段」而不是固定子集——
@@ -264,7 +279,10 @@ export const HistoryRepo = {
       if (key === 'id' || key === 'createdAt' || value === undefined) continue
       patch[key] = value
     }
-    d.insert(history).values(record).onConflictDoUpdate({
+    // Ownership is stamped only on first insert (never in the conflict patch), so a
+    // later patch after an account switch cannot move the row to another account.
+    const owner = record.userId == null ? historyOwner() : null
+    d.insert(history).values(owner ? { ...record, userId: owner.userId, cloudScope: owner.serverUrl } : record).onConflictDoUpdate({
       target: history.id,
       set: patch
     }).run()
@@ -535,7 +553,7 @@ export const HistoryRepo = {
         ...(serverUrl ? [eq(history.cloudScope, serverUrl)] : []),
         ...(serverUrl ? [sql`NOT EXISTS (SELECT 1 FROM history_cloud_evictions e WHERE e.server_url = ${serverUrl} AND e.user_id = ${userId} AND e.id = ${history.id})`] : []),
         sql`(${history.syncStatus} = 'pending_upload' OR
-          (${history.syncStatus} = 'sync_failed' AND (${includeExhausted ? 1 : 0} = 1 OR ${history.syncAttemptCount} < 3)))`,
+          (${history.syncStatus} = 'sync_failed' AND (${includeExhausted ? 1 : 0} = 1 OR ${history.syncAttemptCount} < ${MAX_SYNC_ATTEMPTS})))`,
         eq(history.status, 'completed' as HistoryStatus),
         sql`(
           (${history.refinedText} IS NOT NULL AND ${history.refinedText} <> '')
@@ -611,9 +629,12 @@ export const HistoryRepo = {
       const now = new Date().toISOString()
       const serverUpdatedAt = Number(r.server_updated_at ?? Date.now())
 
-      const existing = d.select({ id: history.id, userId: history.userId, cloudScope: history.cloudScope, syncedFromCloud: history.syncedFromCloud }).from(history)
+      const existing = d.select({ id: history.id, userId: history.userId, cloudScope: history.cloudScope, syncedFromCloud: history.syncedFromCloud, syncStatus: history.syncStatus, syncAttemptCount: history.syncAttemptCount }).from(history)
         .where(eq(history.id, id)).get()
       if (account && existing && !belongsToRemote(existing, account)) continue
+      // Local unpushed changes win while they will still be pushed; exhausted failures heal from the cloud copy.
+      if (existing && (existing.syncStatus === 'pending_upload'
+        || (existing.syncStatus === 'sync_failed' && existing.syncAttemptCount < MAX_SYNC_ATTEMPTS))) continue
 
       const fields = {
         refinedText: (r.refined_text as string) ?? null,
@@ -659,11 +680,16 @@ export const HistoryRepo = {
     if (serverUrl) raw!.prepare(`UPDATE history SET user_id = ?, cloud_scope = ? WHERE
       (user_id IS NULL OR user_id = ?) AND cloud_scope IS NULL AND synced_from_cloud = 0`).run(userId, serverUrl, userId)
     const rows = (await this.pendingSync(userId, limit, includeExhausted, serverUrl))
+    // A new batch supersedes any abandoned one (session change, failed request); never grow unbounded.
+    if (pushedVersions.size + rows.length > MAX_PUSHED_VERSIONS) pushedVersions.clear()
     return rows.map((r) => {
-      const context = voiceContext(r.audioContext, r, blacklist)
-      const meta = jsonObject(r.modeMeta)
-      if (context.redacted) delete meta.selected_text
+      pushedVersions.set(r.id, pushVersion(r))
       // Keep AX dumps, local paths, input-field snapshots and diagnostic payloads local.
+      // The local audio_context column keeps input_context; only the upload omits it.
+      const context: Partial<ReturnType<typeof voiceContext>> = voiceContext(r.audioContext, r, blacklist)
+      delete context.input_context
+      const meta = jsonObject(r.modeMeta)
+      delete meta.selected_text
       const fields = toSnakeCase(r)
       const record: Record<string, unknown> = {}
       for (const key of ['id', 'status', 'mode', 'refined_text', 'duration', 'created_at', 'updated_at', 'audio_metadata', 'app_version', 'mic_device']) {
@@ -675,17 +701,32 @@ export const HistoryRepo = {
     })
   },
 
+  /** Drops push fingerprints for a finished batch (any outcome), or all of them when a push run ends/is abandoned. */
+  releasePushedVersions(ids?: string[]): void {
+    if (!ids) { pushedVersions.clear(); return }
+    for (const id of ids) pushedVersions.delete(id)
+  },
+
+  /** Marks only rows still matching the pushed snapshot; rows edited while the push was in flight stay pending. */
   async markSynced(ids: string[]): Promise<void> {
     if (ids.length === 0) return
     const d = requireDb()
-    d.update(history)
-      .set({ syncStatus: 'synced' as SyncStatus, updatedAt: new Date().toISOString() })
-      .where(sql`${history.id} IN ${ids}`)
-      .run()
+    d.transaction(tx => {
+      const now = new Date().toISOString()
+      for (const id of ids) {
+        const pushed = pushedVersions.get(id)
+        pushedVersions.delete(id)
+        const row = tx.select().from(history).where(eq(history.id, id)).get()
+        if (!row || (pushed !== undefined && pushVersion(row) !== pushed)) continue
+        tx.update(history).set({ syncStatus: 'synced' as SyncStatus, updatedAt: now })
+          .where(eq(history.id, id)).run()
+      }
+    })
   },
 
   async markSyncFailed(ids: string[]): Promise<void> {
     if (ids.length === 0) return
+    for (const id of ids) pushedVersions.delete(id)
     const d = requireDb()
     // 失败次数累加，上层据此做指数退避；超过阈值后不再自动重试
     d.update(history)

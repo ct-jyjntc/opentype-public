@@ -1426,6 +1426,9 @@ details[open] > summary::before { transform: rotate(45deg); }
 .settings-content .app-expression-card .setting-row { background: var(--card); }
 .settings-content .personal-card > button.primary { justify-self: start; }
 .settings-content .app-expression-controls > button { background: var(--card); }
+.settings-content .app-expression-card p.setting-hint, .settings-content .personal-card p.setting-hint { color: var(--warn); }
+.settings-content .is-disabled > :not(.setting-hint) { opacity: 0.5; }
+.settings-content .is-disabled textarea:disabled, .settings-content .is-disabled select:disabled { cursor: not-allowed; }
 .help-content p { margin-bottom: 0; }
 .help-content details { padding: 14px 18px; }
 .settings-content .account-card + form { background: var(--soft); border-radius: 16px; padding: 18px 20px; margin-top: 8px; }

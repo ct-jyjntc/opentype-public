@@ -26,7 +26,10 @@ export interface CallbackServer {
   close: () => void
 }
 
-/** 返回给浏览器的提示页。 */
+const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, ch =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!)
+
+/** 返回给浏览器的提示页。所有插值都经 HTML 转义：detail 可能来自查询参数。 */
 function resultPage(ok: boolean, detail?: string): string {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -57,7 +60,7 @@ function resultPage(ok: boolean, detail?: string): string {
     <h1>${ok ? '登录成功' : '登录失败'}</h1>
     <p>${ok
       ? '已返回 OpenType 应用，可以关闭此页面。'
-      : (detail ? `原因：${detail}` : '请返回应用重试。')}</p>
+      : (detail ? `原因：${escapeHtml(detail)}` : '请返回应用重试。')}</p>
   </div>
   <script>setTimeout(() => window.close(), ${ok ? 1200 : 4000})</script>
 </body>

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Icon, IconButton } from './components/ui'
 import { Markdown } from './components/markdown'
+import { useSyncedTheme } from './theme'
 import { errorMessage, type CardPayload } from '../shared/desktop'
 import './app.css'
 function Card() {
@@ -10,6 +11,7 @@ function Card() {
   const [skill, setSkill] = useState(''), [instruction, setInstruction] = useState('')
   const currentId = useRef<string>()
   const cardRef = useRef<HTMLDivElement>(null)
+  useSyncedTheme()
   // Size the window to the content: short answers get a short card, long ones scroll inside.
   useEffect(() => {
     const card = cardRef.current

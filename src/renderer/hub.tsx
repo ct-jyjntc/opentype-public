@@ -12,6 +12,7 @@ import { DictionaryPage } from './pages/dictionary'
 import { SkillsPage } from './pages/skills'
 import { Settings } from './pages/settings'
 import { shortcutLabel } from './shortcut-label'
+import { useAppearanceTheme } from './theme'
 import {
   errorMessage,
   type HistoryStats,
@@ -66,19 +67,7 @@ function Hub() {
     const timer = setTimeout(() => setToast(''), 4500)
     return () => clearTimeout(timer)
   }, [toast])
-  useEffect(() => {
-    const m = matchMedia('(prefers-color-scheme: dark)')
-    const apply = () =>
-      (document.documentElement.dataset.theme =
-        prefs?.appearance === 'system'
-          ? m.matches
-            ? 'dark'
-            : 'light'
-          : (prefs?.appearance ?? 'light'))
-    apply()
-    m.addEventListener('change', apply)
-    return () => m.removeEventListener('change', apply)
-  }, [prefs?.appearance])
+  useAppearanceTheme(prefs?.appearance)
   return (
     <>
       <div className="titlebar" />

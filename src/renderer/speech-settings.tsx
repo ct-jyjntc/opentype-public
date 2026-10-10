@@ -239,7 +239,7 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
               </span>}
             </span>
             <select disabled={preparing} value={appleLanguage} onChange={event => { changed(); setAppleLanguage(event.target.value) }}>
-              <option value="auto">跟随系统语言</option>
+              <option value="auto">跟随通用识别语言（自动检测时跟随系统）</option>
               {Array.from(new Set(['zh-CN', 'zh-TW', 'yue-CN', 'en-US', 'ja-JP', 'ko-KR', appleLanguage, ...(appleStatus?.supportedLocales ?? []).map(locale => locale.replaceAll('_', '-'))])).filter(locale => locale !== 'auto').sort().map(locale => <option key={locale} value={locale}>{({ 'zh-CN': '普通话', 'zh-TW': '中文（台湾）', 'yue-CN': '粤语', 'en-US': '英语', 'ja-JP': '日语', 'ko-KR': '韩语' } as Record<string, string>)[locale] ?? locale}</option>)}
             </select>
           </label>

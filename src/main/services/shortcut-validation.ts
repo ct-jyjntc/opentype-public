@@ -98,9 +98,10 @@ export function validateShortcut(spec: ShortcutSpec, others: ShortcutSpec[] = []
   const totalKeys = modifiers.length + 1
   if (totalKeys > MAX_KEYS) return { valid: false, error: 'too_many_keys' }
 
-  // 规则 1：不能只含字母数字（必须带修饰键或使用功能键）
+  // 规则 1：不能只含字母数字（必须带修饰键或使用功能键）。
+  // 只加 Shift 也不行：Shift+字母/数字就是正常打字（大写字母、符号）。
   if (isLetter(key) || isDigit(key)) {
-    if (modifiers.length === 0) return { valid: false, error: 'alphanumeric_only' }
+    if (modifiers.every((m) => /^(Left|Right)?Shift$/i.test(m))) return { valid: false, error: 'alphanumeric_only' }
   }
 
   // 规则 2：冲突检测
