@@ -91,7 +91,10 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     let active = true
     setAppleStatus(undefined)
     void window.opentype.appleSpeech.status(appleLanguage).then(value => {
-      if (active) setAppleStatus(value)
+      if (!active) return
+      setAppleStatus(value)
+      // A "model missing" error from before the check finished is stale once it is ready.
+      if (value.installed) { setFailed(false); setMessage('') }
     }).catch(() => { if (active) setAppleStatus({ available: false, installed: false, error: 'apple_speech_unavailable' }) })
     return () => { active = false }
   }, [loaded, provider, appleLanguage, appleRefresh])
@@ -148,9 +151,20 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     try { if (provider === 'apple') await window.opentype.appleSpeech.cancel(); else await window.opentype.localAsr.cancel() }
     catch (error) { setFailed(true); setMessage(errorMessage(error)) }
   }
+  /** Waits for the check still in flight instead of reporting "missing" while it runs. */
+  const currentAppleStatus = async () => {
+    let value = appleStatus
+    if (!value) {
+      try { value = await window.opentype.appleSpeech.status(appleLanguage) }
+      catch { value = { available: false, installed: false, error: 'apple_speech_unavailable' } }
+      if (mountedRef.current) setAppleStatus(value)
+    }
+    if (!value.installed && mountedRef.current) { setFailed(true); setMessage(errorMessage(value.error || 'apple_speech_model_missing')) }
+    return value
+  }
   const save = async (): Promise<boolean> => {
     if (!loaded || conflict || savingRef.current || preparingRef.current) return false
-    if (provider === 'apple' && !appleStatus?.installed) { setFailed(true); setMessage(errorMessage(appleStatus?.error || 'apple_speech_model_missing')); return false }
+    if (provider === 'apple' && !(await currentAppleStatus())?.installed) return false
     savingRef.current = true
     setSaving(true)
     changed()
@@ -179,14 +193,14 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     if (provider === 'local' && status?.state !== 'ready') {
       setFailed(true); setMessage('请先准备本地模型，再继续。'); return
     }
-    if (provider === 'apple' && !appleStatus?.installed) { setFailed(true); setMessage(errorMessage(appleStatus?.error || 'apple_speech_model_missing')); return }
+    if (provider === 'apple' && !(await currentAppleStatus())?.installed) return
     if (!dirty || await save()) onDone?.()
   }
   const busyModel = status?.state === 'downloading' || status?.state === 'installing' || status?.state === 'checking'
   const providers: [SpeechProvider, string, string, string][] = [
-    ['siliconflow', 'cloud', '云端', '免下载，上传录音'],
-    ['local', 'drive', '本地', '240 MB，可离线'],
-    ['apple', 'apple', 'Apple', 'macOS 本机识别'],
+    ['siliconflow', 'cloud', '云端', '免下载，需联网'],
+    ['local', 'drive', '本地', '240 MB，离线'],
+    ['apple', 'apple', 'Apple', '系统自带'],
   ]
   const refineFields = <>
     <div className="asr-row">

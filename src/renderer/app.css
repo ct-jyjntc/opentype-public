@@ -1846,3 +1846,9 @@ button.about-link svg { flex-shrink: 0; }
 .asr-field-meta.ready { color: var(--ok); font-weight: 600; }
 .asr-field-meta.pending { color: var(--warn); font-weight: 600; }
 .asr .text-button.strong { color: var(--text); font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+
+/* Action row: buttons never shrink; the message takes the rest and wraps on its own. */
+.asr-actions { flex-wrap: wrap; }
+.asr-actions > button { flex-shrink: 0; white-space: nowrap; }
+.asr-actions .asr-message { flex: 1 1 220px; min-width: 0; line-height: 1.5; }
+.asr-provider small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
