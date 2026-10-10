@@ -3,9 +3,9 @@
 // - 持有唯一一份原生资源句柄（数据库、FFI、窗口）
 
 import { app, BrowserWindow, dialog, ipcMain, screen, Tray, Menu, nativeImage, shell, systemPreferences, safeStorage, utilityProcess, powerMonitor } from 'electron'
-import { join, basename, relative, isAbsolute } from 'node:path'
+import { join, basename, relative, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { readFile, writeFile, stat } from 'node:fs/promises'
 import { serviceRequest as request } from './services/network'
 
@@ -2144,6 +2144,22 @@ app.setPath('userData', profile.userData)
 app.setPath('logs', profile.logs)
 app.setPath('sessionData', profile.userData)
 
+function confirmUpdaterRestart() {
+  const token = app.commandLine.getSwitchValue('update-install-confirm-token')
+  const requestedPath = app.commandLine.getSwitchValue('update-install-confirm-path')
+  if (!/^[a-f0-9]{32}$/.test(token) || !requestedPath) return
+  try {
+    const installDir = join(app.getPath('userData'), 'update-install')
+    mkdirSync(installDir, { recursive:true, mode:0o700 })
+    const canonicalDir = realpathSync(installDir)
+    const markerPath = join(canonicalDir, `confirm-${token}.json`)
+    if (resolve(requestedPath) !== markerPath || existsSync(markerPath)) return
+    writeFileSync(markerPath, JSON.stringify({ token, pid:process.pid, version:app.getVersion(), userDataPath:app.getPath('userData') }), { mode:0o600, flag:'wx' })
+  } catch (error) {
+    console.warn('[opentype] update restart confirmation failed:', error)
+  }
+}
+
 // Every webContents (main, bar, card, settings): no navigation away from the app's own pages
 // (e.g. a link dropped onto a window) and no <webview>. Subframes such as Turnstile are unaffected.
 app.on('web-contents-created', (_event, contents) => {
@@ -2244,6 +2260,7 @@ if (gotLock) app.whenReady().then(async () => {
   if (process.platform === 'darwin' && app.dock && !preferences.showInDock) app.dock.hide()
   registerIpc()
   barWindow = createBarWindow()
+  barWindow.webContents.once('did-finish-load', confirmUpdaterRestart)
   barPositioner = new FloatingBarPositioner(barWindow, floatingBarPreferences, floatingBar => {
     const saved = (store?.get('app-settings' as never) ?? {}) as Record<string, unknown>
     store?.set({ 'app-settings': { ...saved, floatingBar } } as never)

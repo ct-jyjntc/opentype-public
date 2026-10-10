@@ -18,6 +18,10 @@
   ],
   "extraResources": [
     {
+      "from": "src/main/services/update-installer-helper.cjs",
+      "to": "update-installer-helper.cjs"
+    },
+    {
       "from": "native/output-audio/build",
       "to": "lib/output-audio/build"
     },

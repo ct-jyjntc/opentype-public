@@ -745,7 +745,7 @@ function About() {
     }).catch(e => { if (alive) setError(errorMessage(e)) })
     return () => { alive = false; off() }
   }, [])
-  const status = update.message || ({checking:'正在检查…',current:'已是最新版本',available:`发现新版本 ${update.version ?? ''}`,downloading:`正在下载 ${Math.round(update.percent??0)}%`,ready:'更新已下载',cancelled:'下载已取消',error:'更新失败',unavailable:'此版本不支持自动更新'} as Record<string,string>)[update.phase]
+  const status = update.message || ({checking:'正在检查…',current:'已是最新版本',available:`发现新版本 ${update.version ?? ''}`,downloading:`正在下载 ${Math.round(update.percent??0)}%`,ready:'更新已下载',installing:'正在安装更新…',cancelled:'下载已取消',error:'更新失败',unavailable:'此版本不支持自动更新'} as Record<string,string>)[update.phase]
   const open = (url: string) => void api.desktop.openUrl(url).catch(e => setError(errorMessage(e)))
   return (
     <div className="about-list">
@@ -757,6 +757,7 @@ function About() {
         {update.phase === 'available' ? <button className="primary" disabled={busy} onClick={() => void change(() => api.desktop.updater.download())}>下载更新</button>
           : update.phase === 'downloading' ? <button onClick={() => void api.desktop.updater.cancel().then(setUpdate).catch(e => setError(errorMessage(e)))}>取消下载</button>
           : update.phase === 'ready' ? <button className="primary" disabled={busy} onClick={() => void change(() => api.desktop.updater.install())}>重启并安装</button>
+          : update.phase === 'installing' ? <button disabled>正在安装…</button>
           : <button disabled={busy} onClick={() => void change(() => api.desktop.updater.check(update.channel))}>{update.phase === 'checking' ? '正在检查…' : '检查更新'}</button>}
       </div>
       {update.phase === 'downloading' && <progress value={update.percent ?? 0} max={100} aria-label="更新下载进度" />}

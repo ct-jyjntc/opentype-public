@@ -15,7 +15,7 @@ export default defineConfig([
     outDir: 'dist/main',
     clean: true,
     sourcemap: true,
-    external: ['electron', 'better-sqlite3', 'koffi', 'undici', 'electron-store', 'electron-updater', 'sherpa-onnx-node', 'ogg-opus-decoder']
+    external: ['electron', 'original-fs', 'better-sqlite3', 'koffi', 'undici', 'electron-store', 'electron-updater', 'sherpa-onnx-node', 'ogg-opus-decoder']
   },
   {
     entry: { index: 'src/preload/index.ts' },

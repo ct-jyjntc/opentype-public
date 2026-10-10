@@ -52,6 +52,10 @@ npm run pack:beta
 
 产物位于 `release/testing/<版本>/`，使用本地 ad-hoc 签名，未公证。发布到用户设备前应自行完成 Developer ID 签名、公证和真人验收；安装包、证书及签名配置不提交 Git。
 
+macOS 临时签名版本使用事务式 ZIP 更新：应用通过固定 GitHub HTTPS 更新源下载并校验 SHA-512，再检查 ZIP 路径、应用 bundle id、应用版本、CPU 架构和 ad-hoc 签名完整性。安装器先在应用同目录准备新版本，等待旧进程退出后切换。包含启动确认协议的新版本会在界面加载并确认进程后清理旧包；未包含协议的旧候选包会在确认进程持续运行后保留旧包备份。bundle id 用于确认应用结构，不代表发布者认证；临时签名更新仍依赖 HTTPS 元数据与其中的 SHA-512。
+
+从尚未包含此安装器的旧版本升级时，需要先手动安装包含新安装器的修复版；公开的旧版不会获得此修复。启动确认记录与失败诊断保存在当前用户数据目录的 `update-install/` 中。
+
 Windows x64 原生源码和 `electron-builder.windows.cjs` 配置保留，需要 Windows SDK、MSVC、CMake 及 x64 Node/Electron。当前仓库的历史验收记录没有 Windows 编译和运行结果，不能视为可用 Windows 发布版。
 
 检查更新、发布页与构建发布配置均使用 `ct-jyjntc/opentype-public`。[0.2.0 正式版](https://github.com/ct-jyjntc/opentype-public/releases/tag/v0.2.0) 提供 DMG、ZIP、更新元数据与校验文件，为临时签名，未经 Apple 公证。
