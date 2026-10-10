@@ -10,7 +10,7 @@
 
 - 开发与构建见 [README](README.md)。
 - 密钥配置、泄露处理与提交前检查见 [SECURITY](SECURITY.md)。
-- 最近版本行为见 [0.2.0 版本说明](docs/releases/0.2.0.md)；上一轮真人复测范围见 [beta.26 复测清单](docs/testing/OpenType-0.2.0-beta.26-真人复测.md)。
+- 最近版本行为见 [0.2.1 版本说明](docs/releases/0.2.1.md)；上一轮真人复测范围见 [beta.26 复测清单](docs/testing/OpenType-0.2.0-beta.26-真人复测.md)。
 - macOS 文字投递 `native/input-helper/TextInjector.swift` 复制自 VocaMac（AGPL-3.0），保持与上游一致，改动只限文件头注明的结果回报；项目整体以 AGPL-3.0 发布。
 - `docs/releases`、`docs/reviews`、`docs/testing` 中较早内容为历史记录，不代表当前功能；其中引用的旧提交、内部运行报告和安装包不随公开快照提供。
 
