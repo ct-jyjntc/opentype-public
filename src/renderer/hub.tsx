@@ -76,7 +76,6 @@ function Hub() {
           <div className="sidebar-brand">
             <Icon name="logo" size={22} />
             <span>OpenType</span>
-            <em>Beta</em>
           </div>
           <nav>
             {[
