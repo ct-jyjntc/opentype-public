@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { wireCaptureLifecycle } from './capture'
 import { Icon } from './components/ui'
 import { errorMessage, type VoiceState, type Preferences } from '../shared/desktop'
+import type { CorrectionCandidate } from '../shared/corrections'
 import './floating-bar.css'
 const labels = {
   idle: '',
@@ -20,13 +21,42 @@ const labels = {
 }
 // Symmetric envelope: short at the edges, tall in the middle.
 const wave = [5, 8, 12, 16, 19, 16, 12, 8, 5]
+const activeCapturePhases = ['preparing', 'recording', 'stopping', 'encoding', 'uploading', 'transcribing', 'refining', 'injecting']
 function FloatingBar() {
   const [state, setState] = useState<VoiceState>({ phase: 'idle' }),
-    [seconds, setSeconds] = useState(0)
+    [seconds, setSeconds] = useState(0),
+    [candidate, setCandidate] = useState<CorrectionCandidate | null>(null),
+    [candidateScope, setCandidateScope] = useState<string>(),
+    [candidateBusy, setCandidateBusy] = useState(false),
+    [feedback, setFeedback] = useState(''),
+    [feedbackTitle, setFeedbackTitle] = useState('')
   const preferences = useRef<Preferences>()
   const device = useRef('default'),
     started = useRef(0),
-    sessionId = useRef('')
+    sessionId = useRef(''),
+    stateRef = useRef<VoiceState>({ phase: 'idle' }),
+    candidateRef = useRef<CorrectionCandidate | null>(null),
+    candidateAction = useRef(false),
+    deferredRetraction = useRef(''),
+    feedbackTimer = useRef<ReturnType<typeof setTimeout>>(),
+    hideBarTimer = useRef<ReturnType<typeof setTimeout>>(),
+    feedbackRef = useRef(''),
+    correctionSessionRef = useRef(false)
+  const updateCandidate = (value: CorrectionCandidate | null) => {
+    candidateRef.current = value
+    setCandidate(value)
+  }
+  const updateFeedback = (value: string) => {
+    feedbackRef.current = value
+    setFeedback(value)
+  }
+  const hideWhenSettled = (delay = 0) => {
+    clearTimeout(hideBarTimer.current)
+    hideBarTimer.current = setTimeout(() => {
+      if (activeCapturePhases.includes(stateRef.current.phase) || candidateRef.current || feedbackRef.current) return
+      void window.opentype.window.hideBar()
+    }, delay)
+  }
   useEffect(() => {
     void window.opentype.config
       .get()
@@ -38,18 +68,51 @@ function FloatingBar() {
     const offPreferences = window.opentype.desktop.onPreferences(p => { preferences.current = p })
     const offCapture = wireCaptureLifecycle(() => device.current, () => preferences.current)
     const off = window.opentype.desktop.recording.onState((s) => {
+      stateRef.current = s
       if (s.phase === 'recording' && s.audioId !== sessionId.current) {
         sessionId.current = s.audioId ?? ''
         started.current = Date.now()
         setSeconds(0)
       }
+      if (activeCapturePhases.includes(s.phase)) {
+        clearTimeout(hideBarTimer.current)
+        clearTimeout(feedbackTimer.current)
+        updateCandidate(null)
+        setCandidateScope(undefined)
+        deferredRetraction.current = ''
+        correctionSessionRef.current = false
+        updateFeedback('')
+        setFeedbackTitle('')
+      }
       setState(s)
+    })
+    const offCandidate = window.opentype.desktop.corrections.onCapsuleCandidate(({ candidate: next, candidateId, scope }) => {
+      if (next && candidateRef.current?.id === next.id) return
+      if (!next) {
+        const targetId = candidateId
+        if (!candidateRef.current || targetId !== candidateRef.current.id) return
+        if (candidateAction.current) {
+          deferredRetraction.current = targetId
+          return
+        }
+      }
+      clearTimeout(feedbackTimer.current)
+      clearTimeout(hideBarTimer.current)
+      if (next) correctionSessionRef.current = true
+      updateCandidate(next)
+      setCandidateScope(next ? scope : undefined)
+      updateFeedback('')
+      setFeedbackTitle('')
+      if (!next) hideWhenSettled()
     })
     return () => {
       off()
+      offCandidate()
       offCapture()
       offConfig()
       offPreferences()
+      clearTimeout(feedbackTimer.current)
+      clearTimeout(hideBarTimer.current)
     }
   }, [])
   useEffect(() => {
@@ -60,6 +123,118 @@ function FloatingBar() {
     )
     return () => clearInterval(timer)
   }, [state.phase])
+  const captureBusy = activeCapturePhases.includes(state.phase)
+  const acceptCandidate = async () => {
+    const activeCandidate = candidateRef.current
+    if (!activeCandidate || candidateAction.current || captureBusy) return
+    candidateAction.current = true
+    setCandidateBusy(true)
+    try {
+      await window.opentype.desktop.corrections.accept(activeCandidate.id, activeCandidate.replacement, activeCandidate.original, candidateScope)
+      if (candidateRef.current?.id !== activeCandidate.id) return
+      updateCandidate(null)
+      setCandidateScope(undefined)
+      updateFeedback('已加入词典')
+      setFeedbackTitle('')
+      feedbackTimer.current = setTimeout(() => {
+        if (candidateRef.current || activeCapturePhases.includes(stateRef.current.phase) || feedbackRef.current !== '已加入词典') return
+        updateFeedback('')
+        hideWhenSettled()
+      }, 1300)
+    } catch (error) {
+      if (candidateRef.current?.id !== activeCandidate.id) return
+      const detail = errorMessage(error)
+      const scopeChanged = error instanceof Error && error.message === 'dictionary_scope_changed'
+      const retractedDuringAction = deferredRetraction.current === activeCandidate.id
+      if (scopeChanged) {
+        updateCandidate(null)
+        setCandidateScope(undefined)
+        correctionSessionRef.current = true
+      }
+      updateFeedback(`加入失败：${detail}`)
+      setFeedbackTitle(detail)
+      feedbackTimer.current = setTimeout(() => {
+        if (activeCapturePhases.includes(stateRef.current.phase) || feedbackRef.current !== `加入失败：${detail}`) return
+        if (candidateRef.current?.id === activeCandidate.id || ((scopeChanged || retractedDuringAction) && !candidateRef.current)) {
+          updateFeedback('')
+          if (!candidateRef.current) hideWhenSettled()
+        }
+      }, 2200)
+    } finally {
+      if (deferredRetraction.current === activeCandidate.id) {
+        if (candidateRef.current?.id === activeCandidate.id) {
+          updateCandidate(null)
+          setCandidateScope(undefined)
+          correctionSessionRef.current = true
+          if (!feedbackRef.current) hideWhenSettled()
+        }
+        deferredRetraction.current = ''
+      }
+      candidateAction.current = false
+      setCandidateBusy(false)
+    }
+  }
+  const dismissCandidate = async () => {
+    const activeCandidate = candidateRef.current
+    if (!activeCandidate || candidateAction.current || captureBusy) return
+    candidateAction.current = true
+    setCandidateBusy(true)
+    try {
+      await window.opentype.desktop.corrections.dismiss(activeCandidate.id)
+      if (candidateRef.current?.id === activeCandidate.id) {
+        updateCandidate(null)
+        setCandidateScope(undefined)
+        correctionSessionRef.current = true
+        updateFeedback('')
+        setFeedbackTitle('')
+        hideWhenSettled()
+      }
+    } catch (error) {
+      if (candidateRef.current?.id !== activeCandidate.id) return
+      const detail = errorMessage(error)
+      const retractedDuringAction = deferredRetraction.current === activeCandidate.id
+      updateFeedback(`关闭失败：${detail}`)
+      setFeedbackTitle(detail)
+      feedbackTimer.current = setTimeout(() => {
+        if (activeCapturePhases.includes(stateRef.current.phase) || feedbackRef.current !== `关闭失败：${detail}`) return
+        if (candidateRef.current?.id === activeCandidate.id || (retractedDuringAction && !candidateRef.current)) {
+          updateFeedback('')
+          if (!candidateRef.current) hideWhenSettled()
+        }
+      }, 2200)
+    } finally {
+      if (deferredRetraction.current === activeCandidate.id) {
+        if (candidateRef.current?.id === activeCandidate.id) {
+          updateCandidate(null)
+          setCandidateScope(undefined)
+          correctionSessionRef.current = true
+          if (!feedbackRef.current) hideWhenSettled()
+        }
+        deferredRetraction.current = ''
+      }
+      candidateAction.current = false
+      setCandidateBusy(false)
+    }
+  }
+  if (!captureBusy && candidate && state.phase !== 'error' && state.phase !== 'cancelled') {
+    return (
+      <div className="correction-pill" role="status" aria-label={`${candidate.original} 改为 ${candidate.replacement}`}>
+        <span className="correction-word" title={candidate.original}>{candidate.original}</span>
+        <span className="correction-arrow" aria-hidden="true">→</span>
+        <span className="correction-word" title={candidate.replacement}>{candidate.replacement}</span>
+        <button className="correction-accept" disabled={candidateBusy} onMouseDown={e => e.preventDefault()} onClick={() => void acceptCandidate()} title={feedbackTitle || '加入词典'}>
+          {feedback || '加入词典'}
+        </button>
+        <button className="correction-dismiss" disabled={candidateBusy} onMouseDown={e => e.preventDefault()} onClick={() => void dismissCandidate()} aria-label="关闭此纠词提示" title="关闭此提示">
+          <Icon name="close" size={14} />
+        </button>
+      </div>
+    )
+  }
+  if (!captureBusy && !candidate && feedback && state.phase !== 'error' && state.phase !== 'cancelled') {
+    return <div className="correction-pill correction-feedback" role="status" title={feedbackTitle}>{feedback}</div>
+  }
+  if (!captureBusy && correctionSessionRef.current && !candidate && !feedback && state.phase === 'done') return null
   if (state.phase === 'idle') return null
   // Mode is shown by colour only: dictation white, translation blue, ask-anything green.
   const mode = state.mode === 'voice_translation' ? 'translate' : state.mode === 'voice_command' ? 'ask' : 'dictate'

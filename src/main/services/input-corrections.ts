@@ -5,12 +5,14 @@ export interface InputObservationNative {
   read(token: string): { active?: boolean; text?: string; reason?: string }
   release(token: string): void
 }
-interface Observation { token: string; id: string; original: string; target: CaptureTarget; started: number; latest: string; saved: string; changedAt: number }
+interface Observation { token: string; id: string; original: string; target: CaptureTarget; scope: string; started: number; latest: string; saved: string; changedAt: number }
 interface Deps {
   native: InputObservationNative
   enabled: () => boolean
   allowed: (id: string, text: string, target: CaptureTarget) => boolean
-  save: (id: string, original: string, corrected: string, target: CaptureTarget) => boolean
+  save: (id: string, original: string, corrected: string, target: CaptureTarget, scope: string) => boolean
+  scope?: () => string
+  retract?: (id: string) => void
   now?: () => number
   schedule?: (fn: () => void) => () => void
 }
@@ -29,7 +31,7 @@ export class InputCorrections {
     try {
       if (!this.deps.allowed(id, original, target) || !this.deps.native.begin(target.inputToken, original).ok) return false
       const now = this.now()
-      this.current = { token: target.inputToken, id, original, target, started: now, latest: original, saved: original, changedAt: now }
+      this.current = { token: target.inputToken, id, original, target, scope: this.deps.scope?.() ?? '', started: now, latest: original, saved: original, changedAt: now }
       const tick = () => this.poll()
       this.cancelTimer = this.deps.schedule ? this.deps.schedule(tick) : (() => {
         const timer = setInterval(tick, 250); timer.unref(); return () => clearInterval(timer)
@@ -46,28 +48,34 @@ export class InputCorrections {
     if (!s) return
     try {
       const now = this.now()
-      if (now - s.started >= 60_000 || !this.deps.enabled() || !this.deps.allowed(s.id, s.original, s.target)) { this.stop(); return }
+      if (now - s.started >= 60_000 || !this.deps.enabled() || !this.deps.allowed(s.id, s.original, s.target)
+        || (this.deps.scope && this.deps.scope() !== s.scope)) { this.stop(); return }
       const value = this.deps.native.read(s.token)
       if (!value.active || typeof value.text !== 'string' || value.text.length > 100_000) { this.stop(); return }
       if (value.text !== s.latest) {
         // Remove a superseded, still-pending proposal immediately, including
         // undo. Accepted dictionary terms remain under explicit user control.
         if (s.saved !== s.original) {
-          if (!this.deps.save(s.id, s.original, s.original, s.target)) { this.stop(); return }
+          if (!this.deps.save(s.id, s.original, s.original, s.target, s.scope)) { this.stop(); return }
           s.saved = s.original
         }
+        this.deps.retract?.(s.id)
         s.latest = value.text; s.changedAt = now; return
       }
       if (s.latest !== s.saved && now - s.changedAt >= 1500) {
-        if (!this.deps.save(s.id, s.original, s.latest, s.target)) { this.stop(); return }
+        if (!this.deps.save(s.id, s.original, s.latest, s.target, s.scope)) { this.stop(); return }
         s.saved = s.latest
       }
     } catch { this.stop() }
   }
+  cancel(id: string) { if (this.current?.id === id) this.stop() }
   stop() {
     const s = this.current
     this.current = undefined
     this.cancelTimer?.(); this.cancelTimer = undefined
-    if (s) this.deps.native.release(s.token)
+    if (s) {
+      this.deps.retract?.(s.id)
+      this.deps.native.release(s.token)
+    }
   }
 }

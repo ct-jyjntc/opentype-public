@@ -776,19 +776,48 @@ export const CorrectionRepo = {
     return Boolean(row && !wasDeleted(id) && canLearn(row, blacklist) && row.editedText === null && row.refinedText === expected
       && jsonObject(row.modeMeta).input_delivery === 'verified' && learningDomainsAllowed(domains, blacklist))
   },
-  observeEdit(id: string, expected: string, corrected: string, blacklist: string[] = [], domains: string[] = []): { active: boolean; candidates: number } {
+  observeEdit(id: string, expected: string, corrected: string, blacklist: string[] = [], domains: string[] = []): { active: boolean; candidates: number; candidate: CorrectionCandidate | null; retractedIds: string[]; scope: string } {
     return requireDb().transaction(() => {
-      if (typeof corrected !== 'string' || corrected.length > 100_000 || !CorrectionRepo.canObserve(id, expected, blacklist, domains)) return { active: false, candidates: 0 }
+      const scope = DictionaryRepo.scope()
+      if (typeof corrected !== 'string' || corrected.length > 100_000 || !CorrectionRepo.canObserve(id, expected, blacklist, domains)) return { active: false, candidates: 0, candidate: null, retractedIds: [], scope }
       const pairs = extractInputCorrections(expected, corrected)
       // Persist only word pairs, not the edited field or a new history version.
+      const retractedIds = (raw!.prepare("SELECT id FROM correction_candidates WHERE history_id = ? AND state = 'pending' AND source_kind = 'input_edit'").all(id) as { id: string }[]).map(row => row.id)
       raw!.prepare("DELETE FROM correction_candidates WHERE history_id = ? AND state = 'pending' AND source_kind = 'input_edit'").run(id)
+      const known = new Set((raw!.prepare('SELECT term FROM dictionary WHERE user_id = ?').all(scope) as { term: string }[]).map(word => dictionaryTermKey(word.term)))
       const insert = raw!.prepare(`INSERT OR IGNORE INTO correction_candidates
         (id, history_id, original, replacement, source_hash, source_kind, source_domains, created_at) VALUES (?, ?, ?, ?, ?, 'input_edit', ?, ?)`)
       let candidates = 0
-      for (const pair of pairs) candidates += insert.run(crypto.randomUUID(), id, pair.original, pair.replacement,
-        editHash(expected), JSON.stringify(domains), new Date().toISOString()).changes
-      return { active: true, candidates }
+      let firstId: string | undefined
+      for (const pair of pairs) {
+        if (known.has(dictionaryTermKey(pair.replacement))) continue
+        const candidateId = crypto.randomUUID()
+        const inserted = insert.run(candidateId, id, pair.original, pair.replacement,
+          editHash(expected), JSON.stringify(domains), new Date().toISOString()).changes
+        candidates += inserted
+        if (inserted && !firstId) firstId = candidateId
+      }
+      const candidate = firstId ? raw!.prepare(`SELECT c.id, c.history_id AS historyId, c.original, c.replacement,
+        c.created_at AS createdAt, coalesce(h.focused_app_name, '') AS appName, c.source_kind AS sourceKind
+        FROM correction_candidates c JOIN history h ON h.id = c.history_id WHERE c.id = ?`).get(firstId) as CorrectionCandidate : null
+      return { active: true, candidates, candidate, retractedIds, scope }
     })
+  },
+  dismissInputEdits(historyId: string): string[] {
+    requireDb()
+    const ids = (raw!.prepare("SELECT id FROM correction_candidates WHERE history_id = ? AND state = 'pending' AND source_kind = 'input_edit'").all(historyId) as { id: string }[]).map(row => row.id)
+    raw!.prepare("DELETE FROM correction_candidates WHERE history_id = ? AND state = 'pending' AND source_kind = 'input_edit'").run(historyId)
+    return ids
+  },
+  dismissAllInputEdits(): string[] {
+    requireDb()
+    const ids = (raw!.prepare("SELECT id FROM correction_candidates WHERE state = 'pending' AND source_kind = 'input_edit'").all() as { id: string }[]).map(row => row.id)
+    raw!.prepare("DELETE FROM correction_candidates WHERE state = 'pending' AND source_kind = 'input_edit'").run()
+    return ids
+  },
+  isPendingInputEdit(id: string): boolean {
+    requireDb()
+    return Boolean(raw!.prepare("SELECT 1 FROM correction_candidates WHERE id = ? AND state = 'pending' AND source_kind = 'input_edit' LIMIT 1").get(id))
   },
   restoreVersion(id: string, version: 'raw' | 'processed') {
     return requireDb().transaction(() => {

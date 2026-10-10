@@ -1,7 +1,7 @@
 {
   "name": "opentype",
   "productName": "OpenType",
-  "version": "0.2.0-beta.32",
+  "version": "0.2.0-beta.33",
   "private": true,
   "description": "支持云端与本地 SenseVoice 的语音输入法：快捷键听写，将识别文字写入当前应用",
   "main": "dist/main/index.js",

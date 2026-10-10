@@ -7,7 +7,7 @@ import type { BackupPreview, BackupRestoreResult } from '../shared/backup'
 import type { DictionaryConflict, DictionarySyncStatus } from '../shared/dictionary-sync'
 import type { AudioStorageAction, AudioStorageResult, AudioStorageSnapshot } from '../shared/audio-storage'
 import type { WritingApp } from '../shared/output-preferences'
-import type { CorrectionAcceptance, CorrectionList, HistoryEditResult } from '../shared/corrections'
+import type { CorrectionAcceptance, CorrectionCandidate, CorrectionList, HistoryEditResult } from '../shared/corrections'
 import type {
   KeyboardMonitorStatus,
   ShortcutCaptureState,
@@ -125,6 +125,8 @@ export const desktop = {
     list: (offset = 0, historyId?: string) => invoke<CorrectionList>('desktop:corrections-list', offset, historyId),
     dismiss: (id: string) => invoke<void>('desktop:corrections-dismiss', id),
     accept: (id: string, term: string, hint: string,scope?:string) => invoke<CorrectionAcceptance>('desktop:corrections-accept', id, term, hint,scope),
+    onCapsuleCandidate: (cb: (value: { candidate: CorrectionCandidate | null; candidateId?: string; scope?: string }) => void) =>
+      watch('desktop:correction-capsule-candidate', cb),
   },
   keyboard: {
     beginCapture: (id: string) => invoke<void>('keyboard:begin-capture', id),

@@ -841,14 +841,33 @@ function createSyncEngine(): SyncEngine {
 let pipeline: CaptureSession
 let audioStorage: AudioStorage
 let historyLifecycle: HistoryLifecycle
+let shownCorrectionCapsuleId: string | undefined
 const inputCorrections = new InputCorrections({
   native: InputObservation,
   enabled: () => ((store?.get('app-settings' as never) ?? {}) as Record<string, unknown>).learnFromInputEdits === true,
+  scope: () => DictionaryRepo.scope(),
   allowed: (id, text, target) => !target.audioContext.redacted && CorrectionRepo.canObserve(id, text, getConfig().blacklistDomains, target.inputWebDomains),
-  save: (id, text, corrected, target) => {
+  save: (id, text, corrected, target, scope) => {
+    if (DictionaryRepo.scope() !== scope) return false
     const result = CorrectionRepo.observeEdit(id, text, corrected, getConfig().blacklistDomains, target.inputWebDomains)
-    if (result.active) mainWindow?.webContents.send('desktop:history-changed')
+    if (result.active) {
+      mainWindow?.webContents.send('desktop:history-changed')
+      for (const candidateId of result.retractedIds) {
+        barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: null, candidateId, scope: result.scope })
+      }
+      if (result.candidate) {
+        shownCorrectionCapsuleId = result.candidate.id
+        clearTimeout(barHideTimer)
+        barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: result.candidate, scope: result.scope })
+        barWindow?.showInactive()
+      }
+    }
     return result.active
+  },
+  retract: id => {
+    for (const candidateId of CorrectionRepo.dismissInputEdits(id)) {
+      barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: null, candidateId, scope: DictionaryRepo.scope() })
+    }
   },
 })
 let barHideTimer: ReturnType<typeof setTimeout> | undefined
@@ -862,6 +881,7 @@ function createVoicePipeline(): CaptureSession {
     provider: buildProvider(),
     notify: state => {
       if (state.phase === 'recording' && state.audioId && outputAudioSession !== state.audioId) {
+        inputCorrections.stop()
         outputAudioSession = state.audioId; outputAudioNotice = ''
         const prefs = readPreferences((store?.get('app-settings' as never) ?? {}) as Record<string, unknown>)
         outputAudio?.start(state.audioId, prefs.outputAudio)
@@ -1840,10 +1860,18 @@ function registerIpc(): void {
   ipcMain.handle('history:delete', async (_e, id: string, cloud = false) => {
     if (typeof cloud !== 'boolean') throw new Error('invalid_config')
     if (cloud && !auth.userId) throw new Error('not_authenticated')
+    inputCorrections.cancel(id)
+    for (const candidateId of CorrectionRepo.dismissInputEdits(id)) {
+      barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: null, candidateId, scope: DictionaryRepo.scope() })
+    }
     await historyLifecycle.remove(id, cloud ? { userId: auth.userId!, serverUrl: syncScope(getConfig().cloudBaseUrl) } : undefined)
     return true
   })
   ipcMain.handle('history:clear', async () => {
+    inputCorrections.stop()
+    for (const candidateId of CorrectionRepo.dismissAllInputEdits()) {
+      barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: null, candidateId, scope: DictionaryRepo.scope() })
+    }
     await historyLifecycle.clear()
     return true
   })
@@ -1949,7 +1977,11 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('window:show-bar', () => barWindow?.showInactive())
-  ipcMain.handle('window:hide-bar', () => barWindow?.hide())
+  ipcMain.handle('window:hide-bar', () => {
+    if (currentVoiceState && ['preparing', 'recording', 'stopping', 'encoding', 'uploading', 'transcribing', 'refining', 'injecting'].includes(currentVoiceState.phase)) return
+    if (shownCorrectionCapsuleId && CorrectionRepo.isPendingInputEdit(shownCorrectionCapsuleId)) return
+    return barWindow?.hide()
+  })
 
   ipcMain.handle('input:inject-text', (_e, text: string) => InputHelper.insertText(text))
   ipcMain.handle('input:get-selected-text', () => InputHelper.getSelectedText())

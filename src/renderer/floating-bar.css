@@ -12,7 +12,7 @@ body {
   overflow: hidden;
   font-family: -apple-system, 'PingFang SC', sans-serif;
 }
-#root { display: flex; justify-content: center; }
+#root { display: flex; justify-content: center; width: 100%; min-width: 0; }
 /* Capsule: compact, opaque, Typeless-like. Mode is colour only
    (dictation white, translation blue, ask-anything green).
    No box-shadow / backdrop-filter: on a transparent window they render
@@ -99,5 +99,58 @@ body {
 .recording-pill.error .bar-label { color: #fecaca; }
 .recording-pill.error .bar-state { background: #ffffff14; color: #fca5a5; }
 .recording-pill:not(.recording):not(.done):not(.error):not(.cancelled) .bar-state svg { animation: bar-spin 1.1s linear infinite; }
+.correction-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 12px));
+  min-width: 0;
+  height: 40px;
+  margin: 10px auto;
+  padding: 4px 6px 4px 12px;
+  overflow: hidden;
+  color: #f4f4f5;
+  background: #0b0b0c;
+  border: 1px solid #ffffff33;
+  border-radius: 999px;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+.correction-word {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #f4f4f5;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.correction-arrow { flex-shrink: 0; color: #a1a1aa; font-size: 12px; }
+.correction-pill button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  color: #f4f4f5;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.correction-pill .correction-accept { max-width: 112px; overflow: hidden; background: #ffffff1c; text-overflow: ellipsis; }
+.correction-pill .correction-accept:hover:not(:disabled) { background: #ffffff2b; }
+.correction-pill .correction-dismiss { width: 28px; padding: 0; background: transparent; color: #a1a1aa; }
+.correction-pill .correction-dismiss:hover:not(:disabled) { background: #ffffff18; color: #f4f4f5; }
+.correction-pill button:disabled { opacity: 0.58; cursor: default; }
+.correction-feedback { justify-content: center; padding: 0 16px; font-size: 12px; }
 @keyframes bar-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .bar-state svg { animation: none !important; } }
