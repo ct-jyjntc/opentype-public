@@ -2,7 +2,7 @@
 
 支持云端与本地识别的语音输入法。使用快捷键开始说话，再次按键结束；也可配置为按住说话。识别结果可直接写入当前输入框。
 
-公开仓库：<https://github.com/ct-jyjntc/opentype-public>。当前源码版本为 `0.2.0-beta.26`。本仓库从经过整理的源码快照开始，不迁移旧 Git 历史、私有部署资料、用户数据或旧安装包。
+公开仓库：<https://github.com/ct-jyjntc/opentype-public>。当前源码版本为 `0.2.0`。本仓库从经过整理的源码快照开始，不迁移旧 Git 历史、私有部署资料、用户数据或旧安装包。
 
 ## 功能
 
@@ -54,7 +54,7 @@ npm run pack:beta
 
 Windows x64 原生源码和 `electron-builder.windows.cjs` 配置保留，需要 Windows SDK、MSVC、CMake 及 x64 Node/Electron。当前仓库的历史验收记录没有 Windows 编译和运行结果，不能视为可用 Windows 发布版。
 
-检查更新、发布页与构建发布配置均使用 `ct-jyjntc/opentype-public`。[beta.26 测试版](https://github.com/ct-jyjntc/opentype-public/releases/tag/v0.2.0-beta.26) 已公开提供 DMG、ZIP、测试版更新元数据、校验文件与真人复测清单。beta.26 已修复软件内检查更新，测试版通道的真实包内调用已读到公开发布源；此验收不是鼠标点击，自动下载并安装更新仍需另行真人复测。旧版记录中的本机产物链接、内部运行日志和提交号仅为历史说明。
+检查更新、发布页与构建发布配置均使用 `ct-jyjntc/opentype-public`。[0.2.0 正式版](https://github.com/ct-jyjntc/opentype-public/releases/tag/v0.2.0) 提供 DMG、ZIP、更新元数据与校验文件，为临时签名，未经 Apple 公证。
 
 ## 目录
 
@@ -70,4 +70,8 @@ Windows x64 原生源码和 `electron-builder.windows.cjs` 配置保留，需要
 
 真实凭据、部署配置、用户 profile、词库、录音、数据库、备份和日志禁止提交。使用忽略的本地环境文件，提交示例只保留空值或明确占位符；详见 [SECURITY](SECURITY.md)。
 
-当前变更与待验范围见 [beta.26 版本说明](docs/releases/0.2.0-beta.26.md) 和 [真人复测清单](docs/testing/OpenType-0.2.0-beta.26-真人复测.md)。较早文档为历史记录，可能描述已移除功能。请使用合成内容复测，并在报告中删除密钥、个人数据与部署信息。
+当前变更见 [0.2.0 版本说明](docs/releases/0.2.0.md)；上一轮真人复测范围见 [beta.26 复测清单](docs/testing/OpenType-0.2.0-beta.26-真人复测.md)。较早文档为历史记录，可能描述已移除功能。请使用合成内容复测，并在报告中删除密钥、个人数据与部署信息。
+
+## 许可证
+
+本项目以 [GNU AGPL-3.0](LICENSE) 发布。macOS 文字投递（`native/input-helper/TextInjector.swift`）复制自 [VocaMac](https://github.com/VocaHQ/vocamac) 的 `TextInjector.swift`（AGPL-3.0），文件头注明了来源版本和改动。
