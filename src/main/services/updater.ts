@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, type WebContents } from 'electron'
 import type { AppUpdater, UpdateCheckResult, UpdateDownloadedEvent } from 'electron-updater'
 import { createHash, randomBytes } from 'node:crypto'
-import { access, constants, lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { access, constants, lstat, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises'
 import { closeSync, createReadStream, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join, posix, resolve, sep } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -12,6 +12,8 @@ import type { UpdateState } from '../../shared/updater'
 // Electron patches node:fs to expose app.asar as a virtual filesystem. The
 // updater needs the physical archive bytes here, so use Electron's unpatched fs.
 const asarFs = require('original-fs') as typeof import('node:fs')
+// Staged copies contain app.asar; Electron's patched fs would treat it as a directory while deleting.
+const rm = asarFs.promises.rm
 const execFileAsync = promisify(execFile)
 const APP_ID = 'dev.opentype.desktop'
 // The app gives up on quitting first; the helper must wait strictly longer and
