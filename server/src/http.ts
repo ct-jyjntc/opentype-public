@@ -170,16 +170,69 @@ export function clientIp(req: IncomingMessage): string {
   return peer
 }
 
-/** 简易内存限流。单进程部署够用；多实例需换 Redis。 */
-const buckets = new Map<string, { count: number; resetAt: number }>()
+/**
+ * Rate-limit identity for an address: IPv4 (and IPv4-mapped IPv6) as-is,
+ * IPv6 truncated to its /64 — a single subscriber controls a whole /64, so
+ * per-address buckets would let one host mint unlimited keys.
+ */
+export function rateLimitIp(ip: string): string {
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip)
+  if (mapped && isIP(mapped[1]) === 4) return mapped[1]
+  if (isIP(ip) !== 6) return ip
+  const addr = ip.split('%')[0].toLowerCase()
+  const [head, tail = ''] = addr.split('::')
+  const h = head ? head.split(':') : []
+  const t = addr.includes('::') && tail ? tail.split(':') : []
+  // An embedded IPv4 tail occupies the last 32 bits, never the /64 prefix.
+  const tLen = t.length + (t.at(-1)?.includes('.') ? 1 : 0)
+  const groups = addr.includes('::') ? [...h, ...Array(Math.max(0, 8 - h.length - tLen)).fill('0'), ...t] : h
+  return groups.slice(0, 4).map(g => (parseInt(g, 16) || 0).toString(16)).join(':') + '::/64'
+}
+
+/**
+ * 简易内存限流。单进程部署够用；多实例需换 Redis。
+ *
+ * Two pools. Network-keyed buckets (prefixes below) are evictable: under a
+ * cardinality flood we drop expired ones, then the oldest, and fail open.
+ * Every other key is identity-keyed (mail-*, voice:<user>, reset:…) and is
+ * never evicted, so an IP flood cannot reset a victim's email/voice counters.
+ */
+const EVICTABLE_PREFIXES = ['auth:', 'register:', 'voice-ip:']
+const ipBuckets = new Map<string, { count: number; resetAt: number }>()
+const protectedBuckets = new Map<string, { count: number; resetAt: number }>()
+const MAX_IP_BUCKETS = 50_000
+const MAX_PROTECTED_BUCKETS = 100_000
+const lastSweep = new WeakMap<Map<string, unknown>, number>()
+
+function sweepExpired(map: Map<string, { resetAt: number }>, now: number): void {
+  // At most once per second so a full map of live buckets stays O(1) amortized.
+  if (now - (lastSweep.get(map) ?? 0) < 1000) return
+  lastSweep.set(map, now)
+  for (const [k, v] of map) if (v.resetAt < now) map.delete(k)
+}
 
 export function rateLimit(key: string, limit: number, windowMs: number): boolean {
   const now = Date.now()
+  const evictable = EVICTABLE_PREFIXES.some(p => key.startsWith(p))
+  const buckets = evictable ? ipBuckets : protectedBuckets
   const bucket = buckets.get(key)
 
   if (!bucket || bucket.resetAt < now) {
-    // Fail closed under a cardinality flood until the regular cleanup runs.
-    if (!bucket && buckets.size >= 50_000) return false
+    if (!bucket && buckets.size >= (evictable ? MAX_IP_BUCKETS : MAX_PROTECTED_BUCKETS)) {
+      sweepExpired(buckets, now)
+      if (evictable) {
+        // Oldest first (Map insertion order); fail open for network buckets.
+        for (const k of buckets.keys()) {
+          if (buckets.size < MAX_IP_BUCKETS) break
+          buckets.delete(k)
+        }
+      } else if (buckets.size >= MAX_PROTECTED_BUCKETS) {
+        // Identity counters must keep counting: refuse rather than forget one.
+        return false
+      }
+    }
+    // Re-insert so insertion order tracks the newest window.
+    buckets.delete(key)
     buckets.set(key, { count: 1, resetAt: now + windowMs })
     return true
   }
@@ -191,7 +244,9 @@ export function rateLimit(key: string, limit: number, windowMs: number): boolean
 /** 定期清理过期桶，避免内存无限增长。 */
 setInterval(() => {
   const now = Date.now()
-  for (const [k, v] of buckets) {
-    if (v.resetAt < now) buckets.delete(k)
+  for (const map of [ipBuckets, protectedBuckets]) {
+    for (const [k, v] of map) {
+      if (v.resetAt < now) map.delete(k)
+    }
   }
 }, 60_000).unref()

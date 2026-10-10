@@ -66,6 +66,21 @@ function isSyncCandidate(record: HistoryRecord): boolean {
   return false
 }
 
+const STRING_FIELDS = [
+  'status', 'mode', 'refined_text', 'created_at', 'updated_at', 'audio_local_path',
+  'audio_metadata', 'app_version', 'mic_device', 'debug_info', 'audio_context'
+] as const
+
+/** 字段类型校验在事务前完成：一条畸形记录只拒绝它自己，不让整批 500。 */
+function invalidField(record: HistoryRecord): string | null {
+  const r = record as unknown as Record<string, unknown>
+  for (const name of STRING_FIELDS) {
+    if (r[name] !== undefined && r[name] !== null && typeof r[name] !== 'string') return name
+  }
+  if (r.duration !== undefined && r.duration !== null && (typeof r.duration !== 'number' || !Number.isFinite(r.duration))) return 'duration'
+  return null
+}
+
 /** 把 unknown 转成可存入 SQLite 的值。BLOB 列接受 Buffer 或 null。 */
 function toBlob(value: unknown): Buffer | null {
   if (value === null || value === undefined) return null
@@ -146,6 +161,11 @@ export function pushHistory(userId: string, records: HistoryRecord[], epoch?: nu
     for (const r of records) {
       if (!r?.id || typeof r.id !== 'string') {
         rejected.push({ id: String(r?.id ?? 'unknown'), reason: 'missing_id' })
+        continue
+      }
+      const invalid = invalidField(r)
+      if (invalid) {
+        rejected.push({ id: r.id, reason: `invalid_${invalid}` })
         continue
       }
       if (db.prepare('SELECT 1 FROM history_deletions WHERE user_id = ? AND id = ?').get(userId, r.id)) {

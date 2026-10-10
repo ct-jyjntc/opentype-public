@@ -33,8 +33,8 @@ import {
   listWords, addWord, updateWord, deleteWord, batchDeleteWords, previewBulkImport, bulkImport
 } from './services/dictionary.ts'
 import {
-  readJson, readMultipart, sendOk, sendError, sendJson,
-  clientIp, rateLimit, HttpError
+  readBody, readJson, readMultipart, parseMultipart, sendOk, sendError, sendJson,
+  clientIp, rateLimit, rateLimitIp, HttpError
 } from './http.ts'
 import { challengeConfiguration, challengeRequired, validateChallengeConfiguration, verifyChallenge, type ChallengeAction } from './services/turnstile.ts'
 import { getUsageStats, getInsights } from './services/stats.ts'
@@ -247,7 +247,7 @@ const routes: Record<string, Handler> = {
    * 它只在邮箱已注册时存在，所以生产环境绝不能带它。
    */
   'POST /oauth/request_password_reset': async (req, res) => {
-    if (!rateLimit(`reset:${clientIp(req)}`, 5, 3600_000)) {
+    if (!rateLimit(`reset:${rateLimitIp(clientIp(req))}`, 5, 3600_000)) {
       return sendError(res, 429, 'rate_limited', 429)
     }
     const body = await readJson<{ email: string }>(req)
@@ -594,8 +594,8 @@ const routes: Record<string, Handler> = {
    */
   'POST /ai/voice_flow': async (req, res, auth) => {
     // 未登录也允许（本地使用场景），但限流更严
-    const ip = clientIp(req)
-    if (!rateLimit(`voice:${auth.userId || ip}`, 60, 60_000)) {
+    const voiceKey = auth.userId ? `voice:${auth.userId}` : `voice-ip:${rateLimitIp(clientIp(req))}`
+    if (!rateLimit(voiceKey, 60, 60_000)) {
       return sendError(res, 429, 'rate_limited', 429)
     }
 
@@ -688,7 +688,7 @@ const server = createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname.startsWith('/oauth/')) {
-    const ip = clientIp(req)
+    const ip = rateLimitIp(clientIp(req))
     if (!rateLimit(`auth:${ip}`, 30, 60_000)
       || (url.pathname === '/oauth/register' && !rateLimit(`register:${ip}`, 10, 3600_000))) {
       res.setHeader('retry-after', '60')

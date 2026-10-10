@@ -176,20 +176,36 @@ export function getUserByEmail(email: string): User | null {
   return row ?? null
 }
 
-/** 用邮箱创建或取回账号（邮箱验证码登录用）。 */
+/**
+ * 用邮箱创建或取回账号（邮箱验证码登录用）。调用方已证明邮箱归属。
+ *
+ * 防账号预劫持：/oauth/register 不验证邮箱，攻击者可抢先用受害者邮箱注册。
+ * 真正的邮箱主人首次证明归属时，清掉未经验证的密码并吊销其它全部会话，
+ * 再标记已验证——只发生一次。
+ */
 export function upsertUserByEmail(email: string): User {
   const db = getDb()
   const normalized = email.trim().toLowerCase()
-  const existing = db.prepare('SELECT user_id, email, display_name FROM users WHERE email = ?').get(normalized) as
-    | { user_id: string; email: string; display_name: string } | undefined
-  if (existing) return existing
+  const existing = db.prepare('SELECT user_id, email, display_name, email_verified_at FROM users WHERE email = ?').get(normalized) as
+    | { user_id: string; email: string; display_name: string; email_verified_at: number | null } | undefined
+  if (existing) {
+    if (existing.email_verified_at === null) {
+      transaction(() => {
+        const now = Date.now()
+        db.prepare('UPDATE users SET password_hash = NULL, email_verified_at = ?, updated_at = ? WHERE user_id = ?')
+          .run(now, now, existing.user_id)
+        revokeAllUserTokens(existing.user_id)
+      })
+    }
+    return { user_id: existing.user_id, email: existing.email, display_name: existing.display_name }
+  }
 
   const now = Date.now()
   const userId = randomUUID()
   const displayName = normalized.split('@')[0]
   db.prepare(
-    'INSERT INTO users (user_id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?)'
-  ).run(userId, normalized, displayName, now, now)
+    'INSERT INTO users (user_id, email, password_hash, display_name, created_at, updated_at, email_verified_at) VALUES (?, ?, NULL, ?, ?, ?, ?)'
+  ).run(userId, normalized, displayName, now, now, now)
   return { user_id: userId, email: normalized, display_name: displayName }
 }
 
@@ -331,9 +347,13 @@ export function createEmailCode(email: string): string {
   // 6 位数字。用 randomInt 而非 Math.random——后者可预测。
   const code = String(randomInt(100000, 1000000))
   const now = Date.now()
-  db.prepare(
-    'INSERT OR REPLACE INTO email_codes (email, code, issued_at, expires_at, attempts, consumed_at) VALUES (?, ?, ?, ?, 0, NULL)'
-  ).run(normalized, code, now, now + EMAIL_CODE_TTL_MS)
+  // 每个邮箱只保留最新一张码：先删旧行再插入，旧码随即失效。
+  transaction(() => {
+    db.prepare('DELETE FROM email_codes WHERE email = ?').run(normalized)
+    db.prepare(
+      'INSERT INTO email_codes (email, code, issued_at, expires_at, attempts, consumed_at) VALUES (?, ?, ?, ?, 0, NULL)'
+    ).run(normalized, code, now, now + EMAIL_CODE_TTL_MS)
+  })
   return code
 }
 
@@ -341,8 +361,8 @@ export function verifyEmailCode(email: string, code: string): User | { error: st
   const db = getDb()
   const normalized = email.trim().toLowerCase()
   const row = db.prepare(
-    'SELECT email, code, expires_at, attempts, consumed_at FROM email_codes WHERE email = ?'
-  ).get(normalized) as { email: string; code: string; expires_at: number; attempts: number; consumed_at: number | null } | undefined
+    'SELECT email, code, issued_at, expires_at, attempts, consumed_at FROM email_codes WHERE email = ? ORDER BY issued_at DESC LIMIT 1'
+  ).get(normalized) as { email: string; code: string; issued_at: number; expires_at: number; attempts: number; consumed_at: number | null } | undefined
 
   if (!row) return { error: 'no_code_issued' }
   if (row.consumed_at !== null) return { error: 'code_already_used' }
@@ -351,11 +371,12 @@ export function verifyEmailCode(email: string, code: string): User | { error: st
   if (row.attempts >= 5) return { error: 'too_many_attempts' }
 
   if (row.code !== code) {
-    db.prepare('UPDATE email_codes SET attempts = attempts + 1 WHERE email = ?').run(normalized)
+    db.prepare('UPDATE email_codes SET attempts = attempts + 1 WHERE email = ? AND code = ? AND issued_at = ?').run(normalized, row.code, row.issued_at)
     return { error: 'invalid_code' }
   }
 
-  db.prepare('UPDATE email_codes SET consumed_at = ? WHERE email = ?').run(Date.now(), normalized)
+  db.prepare('UPDATE email_codes SET consumed_at = ? WHERE email = ? AND code = ? AND issued_at = ?')
+    .run(Date.now(), normalized, row.code, row.issued_at)
   return upsertUserByEmail(normalized)
 }
 
@@ -372,9 +393,13 @@ export function createPasswordResetCode(email: string): string {
   const normalized = email.trim().toLowerCase()
   const code = String(randomInt(100000, 1000000))
   const now = Date.now()
-  db.prepare(
-    'INSERT OR REPLACE INTO password_reset_codes (email, code, issued_at, expires_at, attempts, consumed_at) VALUES (?, ?, ?, ?, 0, NULL)'
-  ).run(normalized, code, now, now + RESET_CODE_TTL_MS)
+  // 每个邮箱只保留最新一张码：先删旧行再插入，旧码随即失效。
+  transaction(() => {
+    db.prepare('DELETE FROM password_reset_codes WHERE email = ?').run(normalized)
+    db.prepare(
+      'INSERT INTO password_reset_codes (email, code, issued_at, expires_at, attempts, consumed_at) VALUES (?, ?, ?, ?, 0, NULL)'
+    ).run(normalized, code, now, now + RESET_CODE_TTL_MS)
+  })
   return code
 }
 
@@ -397,8 +422,8 @@ export function resetPasswordWithCode(
   if (newPassword.length < 8) return { error: 'password_too_short' }
 
   const row = db.prepare(
-    'SELECT email, code, expires_at, attempts, consumed_at FROM password_reset_codes WHERE email = ?'
-  ).get(normalized) as { email: string; code: string; expires_at: number; attempts: number; consumed_at: number | null } | undefined
+    'SELECT email, code, issued_at, expires_at, attempts, consumed_at FROM password_reset_codes WHERE email = ? ORDER BY issued_at DESC LIMIT 1'
+  ).get(normalized) as { email: string; code: string; issued_at: number; expires_at: number; attempts: number; consumed_at: number | null } | undefined
 
   if (!row) return { error: 'no_code_issued' }
   if (row.consumed_at !== null) return { error: 'code_already_used' }
@@ -406,7 +431,7 @@ export function resetPasswordWithCode(
   if (row.attempts >= 5) return { error: 'too_many_attempts' }
 
   if (row.code !== code) {
-    db.prepare('UPDATE password_reset_codes SET attempts = attempts + 1 WHERE email = ?').run(normalized)
+    db.prepare('UPDATE password_reset_codes SET attempts = attempts + 1 WHERE email = ? AND code = ? AND issued_at = ?').run(normalized, row.code, row.issued_at)
     return { error: 'invalid_code' }
   }
 
@@ -414,9 +439,11 @@ export function resetPasswordWithCode(
   if (!user) return { error: 'user_not_found' }
 
   transaction(() => {
-    db.prepare('UPDATE password_reset_codes SET consumed_at = ? WHERE email = ?').run(Date.now(), normalized)
-    db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE user_id = ?')
-      .run(hashPassword(newPassword), Date.now(), user.user_id)
+    db.prepare('UPDATE password_reset_codes SET consumed_at = ? WHERE email = ? AND code = ? AND issued_at = ?')
+      .run(Date.now(), normalized, row.code, row.issued_at)
+    // 重置码同样证明了邮箱归属：新密码替换旧密码、吊销全部会话，并标记已验证。
+    db.prepare('UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?), updated_at = ? WHERE user_id = ?')
+      .run(hashPassword(newPassword), Date.now(), Date.now(), user.user_id)
     revokeAllUserTokens(user.user_id)
   })
   return { ok: true }

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
   email         TEXT UNIQUE,
   password_hash TEXT,
   display_name  TEXT,
+  email_verified_at INTEGER,
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -230,6 +231,16 @@ export function initDb(options: DbOptions): DatabaseSync {
     // Old releases did not retain first upload time. Use their last known
     // server timestamp as the migration baseline, never a client clock.
     db.exec('ALTER TABLE history ADD COLUMN cloud_received_at INTEGER; UPDATE history SET cloud_received_at = server_updated_at')
+  }
+  if (!columns('users').has('email_verified_at')) {
+    // Policy: every account that exists when this column is introduced is
+    // treated as verified, so legacy password users keep their password on a
+    // first code login. Only /oauth/register accounts created afterwards start
+    // unverified. Runs exactly once (only while adding the column), atomically.
+    transaction(() => {
+      db!.exec('ALTER TABLE users ADD COLUMN email_verified_at INTEGER')
+      db!.prepare('UPDATE users SET email_verified_at = COALESCE(created_at, updated_at, ?)').run(Date.now())
+    })
   }
   if (!columns('sync_settings').has('cloud_epoch')) db.exec('ALTER TABLE sync_settings ADD COLUMN cloud_epoch INTEGER NOT NULL DEFAULT 0')
   db.exec('CREATE INDEX IF NOT EXISTS idx_history_cloud_age ON history(user_id, cloud_received_at)')
