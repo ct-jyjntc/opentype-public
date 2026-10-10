@@ -100,7 +100,8 @@ export class AppleSpeechProvider implements SpeechProvider {
   constructor(private readonly engine: AppleSpeechEngine, private readonly refinement: RefinementConfig,
     private readonly defaultLanguage = 'auto') {}
   private language(value: unknown) {
-    return typeof value === 'string' && value && value !== 'auto' ? value : this.defaultLanguage
+    if (this.defaultLanguage !== 'auto') return this.defaultLanguage
+    return typeof value === 'string' && value && value !== 'auto' ? value : 'auto'
   }
   async transcribe(params: TranscribeParams): Promise<TranscribeResult> {
     if (params.signal?.aborted) return { success: false, detail: 'cancelled' }
