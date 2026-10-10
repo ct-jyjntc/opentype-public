@@ -3,7 +3,7 @@ import {
   ArrowRight, BookOpen, Check, CircleAlert, CircleHelp, Clock, Cloud, Copy, Download,
   History, Hourglass, House, Info, Languages, Lock, MessageCircleQuestion, Mic, PenLine, Plus,
   RefreshCw, Search, Settings, Sparkles, TextCursorInput, Trash2, User, X, Zap, Upload, Ellipsis,
-  WandSparkles, Blocks, AlignLeft, Scissors, Replace, SpellCheck, ShieldCheck, LoaderCircle, ArrowUpRight, Apple, HardDrive, type LucideIcon,
+  WandSparkles, Blocks, AlignLeft, Scissors, Replace, SpellCheck, ShieldCheck, LoaderCircle, ArrowUpRight, HardDrive, type LucideIcon,
 } from 'lucide-react'
 // Icons come from Lucide (https://lucide.dev) so every glyph shares one grid and stroke.
 // Callers keep using short semantic names; unknown names fall back to the sparkle.
@@ -48,7 +48,6 @@ const icons: Record<string, LucideIcon> = {
   injecting: TextCursorInput,
   loader: LoaderCircle,
   external: ArrowUpRight,
-  apple: Apple,
   drive: HardDrive,
 }
 
@@ -58,6 +57,12 @@ export function Icon({ name, size = 20 }: { name: string; size?: number }) {
     return <span aria-hidden="true" style={{ width: size, height: size, display: 'inline-block', flexShrink: 0,
       backgroundColor: 'currentColor', mask: `url(${mark}) center / contain no-repeat`,
       WebkitMask: `url(${mark}) center / contain no-repeat` }} />
+  }
+  if (name === 'apple') {
+    // Lucide's "apple" is the fruit; the Apple mark is drawn filled, slightly smaller to match stroke icons' weight.
+    return <svg width={size} height={size} viewBox="-2 -1 28 28" fill="currentColor" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" />
+    </svg>
   }
   const Glyph = icons[name] ?? Sparkles
   return <Glyph size={size} strokeWidth={name === 'logo' ? 2.25 : 1.75} aria-hidden="true" />

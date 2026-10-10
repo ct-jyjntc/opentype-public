@@ -1876,3 +1876,8 @@ button.link:disabled { opacity: 0.5; }
 .about-notes { margin: 0 0 6px; }
 .about-notes summary { cursor: pointer; }
 .about-row > div > span { font-variant-numeric: tabular-nums; }
+/* Action row: buttons never shrink; the message takes the rest and wraps on its own. */
+.asr-actions { flex-wrap: wrap; }
+.asr-actions > button { flex-shrink: 0; white-space: nowrap; }
+.asr-actions .asr-message { flex: 1 1 220px; min-width: 0; line-height: 1.5; }
+.asr-provider small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
