@@ -246,7 +246,7 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
         {provider === 'apple' && <>
           <label className="asr-field"><span className="asr-field-head">识别语言
               {!appleStatus?.error && <span className={`asr-field-meta ${appleStatus?.installed ? 'ready' : appleStatus ? 'pending' : ''}`} aria-live="polite">
-                {appleStatus?.installed && <Icon name="check" size={13} />}{!appleStatus ? '正在检查…' : appleStatus.installed ? '已就绪' : '需要准备并授权'}
+                {appleStatus?.installed && <Icon name="check" size={13} />}{!appleStatus ? '正在检查…' : appleStatus.installed ? '已就绪' : '未就绪'}
                 {appleStatus && !appleStatus.installed
                   ? <button type="button" className="text-button strong" disabled={preparing || !appleStatus.available} onClick={event => { event.preventDefault(); void prepareApple() }}>准备并授权</button>
                   : <button type="button" className="text-button" disabled={preparing} onClick={event => { event.preventDefault(); setAppleRefresh(value => value + 1) }}>刷新</button>}

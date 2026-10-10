@@ -1881,3 +1881,23 @@ button.link:disabled { opacity: 0.5; }
 .asr-actions > button { flex-shrink: 0; white-space: nowrap; }
 .asr-actions .asr-message { flex: 1 1 220px; min-width: 0; line-height: 1.5; }
 .asr-provider small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Onboarding at short windows (min 580px tall): tighten so no step needs scrolling */
+@media (max-height: 680px) {
+  .onb-brand { top: 20px; }
+  .onb-main, .onb-main:has(.asr-onb) { padding-top: 72px; padding-bottom: 16px; }
+  .onb-progress { margin-bottom: 16px; }
+  .onboarding h1 { font-size: 28px; margin-bottom: 6px; }
+  .onboarding .onb-main > p, .onb-main:has(.asr-onb) > p { margin-bottom: 14px; line-height: 1.6; }
+  .onboarding-permissions { gap: 6px; margin-bottom: 14px; }
+  .perm-item { padding: 8px 12px; }
+  .perm-icon { width: 30px; height: 30px; }
+  .onboarding .onboarding-tips { margin-bottom: 14px; }
+  .onboarding .asr.asr-onb, .onboarding .asr.asr-onb fieldset { gap: 10px; }
+  .onboarding .onb-actions .large, .onboarding .onb-actions .ghost,
+  .onboarding .asr.asr-onb .asr-actions .large, .onboarding .asr.asr-onb .asr-actions .ghost { min-height: 42px; }
+}
+@media (max-height: 680px) and (max-width: 850px) {
+  .onb-main { max-width: 640px; margin: 0 auto; }
+  .onboarding .asr.asr-onb, .onboarding-permissions { max-width: 560px; }
+}
