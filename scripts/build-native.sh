@@ -12,7 +12,7 @@ build_one() {
   local out="$NATIVE/$name/build/lib$3.dylib"
   local sources=("$src")
   if [[ "$name" == "input-helper" ]]; then
-    sources+=("$NATIVE/input-helper/PasteboardRestorer.swift" "$NATIVE/input-helper/InputTarget.swift")
+    sources+=("$NATIVE/input-helper/PasteboardRestorer.swift" "$NATIVE/input-helper/InputTarget.swift" "$NATIVE/input-helper/TextInjector.swift" "$NATIVE/input-helper/VocaMacCompat.swift")
   fi
   mkdir -p "$(dirname "$out")"
 

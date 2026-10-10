@@ -1,6 +1,5 @@
 import AppKit
 import ApplicationServices
-import Carbon.HIToolbox
 
 private func targetAttr(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
@@ -339,15 +338,51 @@ private func commitInputTargetOnMain(_ tokenPtr: UnsafePointer<CChar>?, _ textPt
         target.insertedText = text
     }
     target.submitted = true
-    switch insertViaAccessibility(text, targetPID: target.app.processIdentifier) {
-    case .inserted: return targetJSON(["submitted": true, "method": "accessibility"])
-    case .uncertain: return targetJSON(["submitted": true, "method": "accessibility", "uncertain": true])
-    case .unavailable: break
+    return nil
+}
+
+/// One shared injector: VocaMac serializes every clipboard delivery through it.
+private let textInjector = TextInjector()
+
+/// Receives the first outcome of one delivery; later reports are ignored.
+private final class DeliveryWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let done = DispatchSemaphore(value: 0)
+    private var outcome: DeliveryOutcome?
+    func report(_ value: DeliveryOutcome) {
+        lock.lock(); defer { lock.unlock() }
+        guard outcome == nil else { return }
+        outcome = value
+        done.signal()
     }
-    switch pasteThroughClipboard(text, targetPID: target.app.processIdentifier) {
-    case .posted: return targetJSON(["submitted": true, "method": "clipboard"])
-    case .appChanged: target.submitted = false; return targetJSON(["reason": "injection_app_changed"])
-    case .clipboardFailed: target.submitted = false; return targetJSON(["reason": "injection_clipboard_unavailable"])
+    func wait(seconds: Double) -> DeliveryOutcome? {
+        _ = done.wait(timeout: .now() + seconds)
+        lock.lock(); defer { lock.unlock() }
+        return outcome
+    }
+}
+
+/// Token validation runs on main; delivery is VocaMac's TextInjector, which
+/// writes Accessibility off the main thread and pastes on it. Koffi calls this
+/// from a worker thread, which waits for the outcome without blocking AppKit.
+private func commitInputTargetThroughInjector(_ tokenPtr: UnsafePointer<CChar>?, _ textPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
+    if let refused = onTargetMain({ commitInputTargetOnMain(tokenPtr, textPtr) }) { return refused }
+    guard let tokenPtr, let textPtr else { return targetJSON(["reason": "injection_target_unavailable"]) }
+    let token = String(cString: tokenPtr), text = String(cString: textPtr)
+    let pid = onTargetMain { inputTargets[token]?.app.processIdentifier } ?? 0
+    let waiter = DeliveryWaiter()
+    textInjector.inject(text: text, preserveClipboard: true, expectedProcessID: pid, report: { waiter.report($0) })
+    // The main thread cannot wait for work it has to run itself.
+    if Thread.isMainThread { return targetJSON(["submitted": true, "method": "unknown"]) }
+    // A queued delivery waits for the previous paste (up to its 2s receipt timeout).
+    switch waiter.wait(seconds: 8) {
+    case .accessibility: return targetJSON(["submitted": true, "method": "accessibility"])
+    case .uncertain: return targetJSON(["submitted": true, "method": "accessibility", "uncertain": true])
+    case .pasted: return targetJSON(["submitted": true, "method": "clipboard"])
+    case .failed(let reason):
+        onTargetMain { inputTargets[token]?.submitted = false }
+        return targetJSON(["reason": reason])
+    case nil: return targetJSON(["submitted": true, "method": "unknown", "uncertain": true])
     }
 }
 
@@ -416,7 +451,7 @@ public func releaseInputTarget(_ tokenPtr: UnsafePointer<CChar>?) {
 // Called through Koffi's async API. UI mutations execute on the AppKit main
 // queue after the initiating JavaScript callback has unwound, avoiding nested
 // Electron event dispatch inside a synchronous FFI call.
-private func onTargetMain(_ action: () -> UnsafeMutablePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
+private func onTargetMain<T>(_ action: () -> T) -> T {
     if Thread.isMainThread { return action() }
     return DispatchQueue.main.sync(execute: action)
 }
@@ -426,150 +461,5 @@ public func prepareInputTarget(_ token: UnsafePointer<CChar>?) -> UnsafeMutableP
 }
 @_cdecl("commitInputTarget")
 public func commitInputTarget(_ token: UnsafePointer<CChar>?, _ text: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
-    return onTargetMain { commitInputTargetOnMain(token, text) }
-}
-
-// MARK: - Delivery (same strategy as VocaMac's TextInjector)
-//
-// 1. Accessibility write of kAXSelectedText, only for single-line fields that
-//    say the write is settable. Multi-line views (editors, terminals,
-//    contenteditable) accept the write and then drop or mangle it.
-// 2. Otherwise the clipboard plus one Cmd+V on the session event tap, exactly
-//    like the user pressing it. The pasteboard item is a promise, so the
-//    target's read tells us when the paste landed and the user's clipboard
-//    can be put back.
-
-enum AccessibilityInsertion { case inserted, uncertain, unavailable }
-
-private let singleLineRoles: Set<String> = ["AXTextField", "AXSearchField", "AXComboBox"]
-
-/// Menu bar launchers (Raycast, Spotlight) take keyboard focus in a panel
-/// without becoming the frontmost app.
-private func isLauncherPanelOwner(_ pid: pid_t) -> Bool {
-    guard pid != ProcessInfo.processInfo.processIdentifier,
-          let app = NSRunningApplication(processIdentifier: pid) else { return false }
-    return app.activationPolicy != .regular
-}
-
-private func insertViaAccessibility(_ text: String, targetPID: pid_t) -> AccessibilityInsertion {
-    let systemWide = AXUIElementCreateSystemWide()
-    AXUIElementSetMessagingTimeout(systemWide, 0.1)
-    var focusedRef: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-          let element = targetElement(focusedRef) else { return .unavailable }
-    var pid: pid_t = 0
-    guard AXUIElementGetPid(element, &pid) == .success,
-          pid == targetPID || isLauncherPanelOwner(pid) else { return .unavailable }
-    AXUIElementSetMessagingTimeout(element, 0.1)
-    let role = targetAttr(element, kAXRoleAttribute as String) as? String ?? ""
-    guard singleLineRoles.contains(role), !secureTarget(element) else { return .unavailable }
-    var settable = DarwinBoolean(false)
-    guard AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success,
-          settable.boolValue else { return .unavailable }
-    let error = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
-    if error == .success { return .inserted }
-    // A timed-out write may still land; never follow it with a paste.
-    return error == .cannotComplete ? .uncertain : .unavailable
-}
-
-enum ClipboardPaste { case posted, appChanged, clipboardFailed }
-
-/// Clipboard managers that honour this marker skip our temporary entries.
-private let transientPasteboardType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
-
-/// Supplies the text lazily and records whether the read came after our Cmd+V.
-final class PasteReceipt: NSObject, NSPasteboardItemDataProvider {
-    private let text: String
-    private let lock = NSLock()
-    private var posted = false, readBefore = false, readAfter = false
-    init(text: String) { self.text = text }
-    var wasReadBeforePaste: Bool { lock.lock(); defer { lock.unlock() }; return readBefore }
-    var wasReadAfterPaste: Bool { lock.lock(); defer { lock.unlock() }; return readAfter }
-    func markPosted() { lock.lock(); posted = true; lock.unlock() }
-    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        item.setString(text, forType: .string)
-        lock.lock(); if posted { readAfter = true } else { readBefore = true }; lock.unlock()
-    }
-}
-
-private let deliveryRestorer = PasteboardRestorer(NSPasteboard.general)
-
-private func writePromise(_ receipt: PasteReceipt, to pb: NSPasteboard) -> Bool {
-    pb.clearContents()
-    let item = NSPasteboardItem()
-    guard item.setDataProvider(receipt, forTypes: [.string]) else { return false }
-    item.setData(Data(), forType: transientPasteboardType)
-    return pb.writeObjects([item])
-}
-
-func pasteThroughClipboard(_ text: String, targetPID: pid_t) -> ClipboardPaste {
-    let pb = NSPasteboard.general
-    var original = deliveryRestorer.capture()
-    var receipt = PasteReceipt(text: text)
-    guard writePromise(receipt, to: pb) else { restorePasteboard(original, to: pb); return .clipboardFailed }
-    var restoreToken = deliveryRestorer.didWrite(original: original)
-    var changeCount = pb.changeCount
-    // Let the pasteboard settle before the keystroke.
-    Thread.sleep(forTimeInterval: 0.05)
-    if pb.changeCount != changeCount {
-        // Someone copied in between: theirs becomes the clipboard to restore.
-        original = archivePasteboard(pb)
-        receipt = PasteReceipt(text: text)
-        guard writePromise(receipt, to: pb) else { restorePasteboard(original, to: pb); return .clipboardFailed }
-        restoreToken = deliveryRestorer.didWrite(original: original)
-        changeCount = pb.changeCount
-    }
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID else {
-        deliveryRestorer.restoreIfOwned(restoreToken)
-        return .appChanged
-    }
-    receipt.markPosted()
-    postCommandV()
-    restoreAfterPaste(receipt, token: restoreToken, changeCount: changeCount, start: ProcessInfo.processInfo.systemUptime)
-    return .posted
-}
-
-/// Keep our text on the clipboard until the target has read it, then put the
-/// user's clipboard back. 2s without a read (0.5s if something read it before
-/// the keystroke, which hides the target's own read) restores anyway.
-private func restoreAfterPaste(_ receipt: PasteReceipt, token: UUID, changeCount: Int, start: TimeInterval) {
-    let elapsed = ProcessInfo.processInfo.systemUptime - start
-    if receipt.wasReadAfterPaste {
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, 0.15 - elapsed)) { deliveryRestorer.restoreIfOwned(token) }
-        return
-    }
-    if NSPasteboard.general.changeCount != changeCount { return } // the user copied something newer
-    if elapsed >= (receipt.wasReadBeforePaste ? 0.5 : 2.0) { deliveryRestorer.restoreIfOwned(token); return }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { restoreAfterPaste(receipt, token: token, changeCount: changeCount, start: start) }
-}
-
-/// Post Cmd+V where the window server routes real key presses, using the key
-/// that types "v" on the current layout (Dvorak, AZERTY, ...).
-private func postCommandV() {
-    let key = keyCode(forCharacter: "v") ?? CGKeyCode(kVK_ANSI_V)
-    let source = CGEventSource(stateID: .combinedSessionState)
-    for down in [true, false] {
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else { continue }
-        event.flags = .maskCommand
-        event.post(tap: .cgAnnotatedSessionEventTap)
-    }
-}
-
-func keyCode(forCharacter character: Character) -> CGKeyCode? {
-    guard let source = (TISCopyCurrentASCIICapableKeyboardLayoutInputSource() ?? TISCopyCurrentKeyboardLayoutInputSource())?.takeRetainedValue(),
-          let layoutPointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
-    let layout = Unmanaged<CFData>.fromOpaque(layoutPointer).takeUnretainedValue() as Data
-    let wanted = String(character)
-    return layout.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> CGKeyCode? in
-        guard let base = raw.baseAddress else { return nil }
-        let keyboard = base.assumingMemoryBound(to: UCKeyboardLayout.self)
-        var chars = [UniChar](repeating: 0, count: 4)
-        for code in 0..<128 {
-            var deadKeys: UInt32 = 0, length = 0
-            let status = UCKeyTranslate(keyboard, UInt16(code), UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
-                                        OptionBits(kUCKeyTranslateNoDeadKeysBit), &deadKeys, 4, &length, &chars)
-            if status == noErr, length > 0, String(utf16CodeUnits: chars, count: length) == wanted { return CGKeyCode(code) }
-        }
-        return nil
-    }
+    return commitInputTargetThroughInjector(token, text)
 }
