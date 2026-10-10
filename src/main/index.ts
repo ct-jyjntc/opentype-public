@@ -28,6 +28,7 @@ import { HistoryLifecycle, readStoredAudio } from './services/history-lifecycle'
 import { AudioStorage } from './services/audio-storage'
 import { registerAudioStorage } from './services/audio-storage-ipc'
 import { deliverToInput } from './services/input-delivery'
+import { readInputDiagnostics, recordInputDiagnostic, inputDiagnosticReason } from './services/input-diagnostics'
 import { capturedContext } from './services/capture-context'
 import { AnswerCardSession } from './services/answer-card'
 import { InputCorrections } from './services/input-corrections'
@@ -883,12 +884,12 @@ function createVoicePipeline(): CaptureSession {
       }
     },
     getConfig: () => ({...getConfig(), mode:sessionMode, asrLanguage:resolveAsrLanguageFromStore(), appVersion:app.getVersion()}),
-    context: async (mode, signal, preview) => {
+    context: async (mode, signal, preview, traceId) => {
       lastPaste?.abort(); inputCorrections.stop(); closeInteractiveCard()
       // The home-page microphone preview never inserts into another app and
       // does not acquire an external input target or its context.
       if (preview) return capturedContext({ appName: '', bundleId: '', pid: 0, contextRedacted: true }, getConfig().blacklistDomains)
-      const target = await captureVoiceTarget(mode === 'voice_command', signal)
+      const target = await captureVoiceTarget(mode === 'voice_command', signal, traceId)
       if (signal.aborted) { if (target.token) InputHelper.releaseTarget(target.token); signal.throwIfAborted() }
       barPositioner?.begin(target.windowBounds)
       return capturedContext(target, getConfig().blacklistDomains)
@@ -901,7 +902,18 @@ function createVoicePipeline(): CaptureSession {
     saveAudio: (id, data) => historyLifecycle.saveAudio(id, 'wav', data),
     saveHistory: record=>HistoryRepo.upsert(record),
     loadHistory: id=>HistoryRepo.byId(id),
-    inject: (text, target, signal) => deliverToInput(InputDelivery, { token: target.inputToken, reason: target.inputError }, text, signal),
+    inject: async (text, target, signal) => {
+      const traceId = target.inputTraceId ?? ''
+      recordInputDiagnostic(traceId, 'delivery-start')
+      try {
+        const result = await deliverToInput(InputDelivery, { token: target.inputToken, reason: target.inputError }, text, signal)
+        recordInputDiagnostic(traceId, 'delivery-result', { status: result.status, method: result.method, reason: result.detail })
+        return result
+      } catch (error) {
+        recordInputDiagnostic(traceId, 'delivery-failed', { reason: inputDiagnosticReason((error as Error).message) })
+        throw error
+      }
+    },
     releaseTarget: target => { if (target.inputToken) InputHelper.releaseTarget(target.inputToken) },
     observeInput: (id, text, target) => inputCorrections.start(id, text, target),
     showFallback: (text, audioId) => openInteractiveCard({ text, audioId, title: '文字已生成，尚未插入' }),
@@ -928,9 +940,9 @@ function createVoicePipeline(): CaptureSession {
 
 let lastPaste: AbortController | undefined
 let selectionCapture: AbortController | undefined
-function captureVoiceTarget(allowReadOnly: boolean, signal: AbortSignal) {
+function captureVoiceTarget(allowReadOnly: boolean, signal: AbortSignal, traceId?: string) {
   signal.throwIfAborted()
-  return InputHelper.captureTarget(allowReadOnly)
+  return InputHelper.captureTarget(allowReadOnly, traceId)
 }
 async function openSelectionActions() {
   if (pipeline.isBusy || shortcutCapture.active || powerLifecycle?.paused()) return
@@ -1849,6 +1861,31 @@ function registerIpc(): void {
     return status
   })
   ipcMain.handle('local-asr:cancel', event => { modelCaller(event); getLocalModels().dispose() })
+  const diagnosticId = (value: unknown) => {
+    if (typeof value !== 'string' || !/^[a-f0-9-]{36}$/i.test(value)) throw new Error('invalid_config')
+    return value
+  }
+  const diagnosticRecord = async (key: string) => {
+    const data = readInputDiagnostics(key)
+    if (!data.summary.reason && !data.events.some(event => event.stage === 'delivery-result' || event.stage === 'delivery-failed')) {
+      const row = await HistoryRepo.byId(key)
+      data.summary.reason = inputDiagnosticReason(jsonObject(row?.debugInfo).detail)
+    }
+    return data
+  }
+  ipcMain.handle('input-diagnostics:read', async (event, id: unknown) => {
+    modelCaller(event)
+    return diagnosticRecord(diagnosticId(id))
+  })
+  ipcMain.handle('input-diagnostics:export', async (event, id: unknown) => {
+    modelCaller(event)
+    const key = diagnosticId(id), data = await diagnosticRecord(key)
+    const result = await dialog.showSaveDialog({ defaultPath: `OpenType-input-${key}.json`, filters: [{ name: 'JSON', extensions: ['json'] }] })
+    if (result.canceled || !result.filePath) return null
+    await writeFile(result.filePath, JSON.stringify(data, null, 2), { mode: 0o600 })
+    return result.filePath
+  })
+
   const appleLanguage = (value: unknown) => {
     if (typeof value !== 'string' || !/^(auto|[a-zA-Z]{2,3}([_-][a-zA-Z0-9]{2,8})*)$/.test(value)) throw new Error('invalid_config')
     return value

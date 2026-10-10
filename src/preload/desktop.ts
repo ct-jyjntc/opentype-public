@@ -1,5 +1,6 @@
 import { ipcRenderer } from 'electron'
 import type { ProcessingProgress } from '../shared/processing'
+import type { InputDiagnostics } from '../shared/input-diagnostics'
 import type { UpdateState } from '../shared/updater'
 import type { OutputAudioStatus } from '../shared/output-audio'
 import type { BackupPreview, BackupRestoreResult } from '../shared/backup'
@@ -85,6 +86,8 @@ export const desktop = {
   onPreferences: (cb: (value: Preferences) => void) =>
     watch('desktop:preferences-changed', cb),
   history: {
+    diagnostics: (id: string) => invoke<InputDiagnostics>('input-diagnostics:read', id),
+    exportDiagnostics: (id: string) => invoke<string | null>('input-diagnostics:export', id),
     restoreVersion: (id: string, version: 'raw' | 'processed') => invoke<HistoryItem>('desktop:history-restore-version', id, version),
     list: (offset = 0, limit = 50, query = '', mode = '') =>
       invoke<{ data: HistoryItem[]; hasMore: boolean }>(

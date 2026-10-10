@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Empty, Icon, IconButton, Menu, Modal } from '../components/ui'
 import { AudioStorageDialog } from '../components/audio-storage'
 import { errorMessage, parseMeta, type HistoryItem } from '../../shared/desktop'
+import type { InputDiagnostics } from '../../shared/input-diagnostics'
 const api = window.opentype.desktop
 const durationLabel = (value: number | null | undefined) => value == null ? '时长未知' : `${Math.round(value)} 秒`
 const modes = [
@@ -205,6 +206,10 @@ export function HistoryDialog({
   onChange: () => void
   notify: (s: string) => void
 }) {
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
+  const [diagnostics, setDiagnostics] = useState<InputDiagnostics | null>(null)
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState(false)
+  const [diagnosticsError, setDiagnosticsError] = useState('')
   const [record, setRecord] = useState(item),
     [audio, setAudio] = useState(''),
     [busy, setBusy] = useState(false),
@@ -262,6 +267,19 @@ export function HistoryDialog({
       setBusy(false)
     }
   }
+  const openDiagnostics = async () => {
+    setDiagnosticsOpen(true); setDiagnosticsBusy(true); setDiagnosticsError(''); setDiagnostics(null)
+    try { setDiagnostics(await api.history.diagnostics(item.id)) }
+    catch (e) { setDiagnosticsError(errorMessage(e)) }
+    finally { setDiagnosticsBusy(false) }
+  }
+  const diagnosticText = diagnostics ? JSON.stringify(diagnostics, null, 2) : ''
+  const exportDiagnostics = async () => {
+    setDiagnosticsBusy(true); setDiagnosticsError('')
+    try { if (await api.history.exportDiagnostics(item.id)) notify('已导出') }
+    catch (e) { setDiagnosticsError(errorMessage(e)) }
+    finally { setDiagnosticsBusy(false) }
+  }
   return (
     <Modal title="口述详情" onClose={onClose}>
       <div className="dialog-body">
@@ -300,8 +318,24 @@ export function HistoryDialog({
         {suggestions !== null && <p className="muted" role="status">{suggestions > 0
           ? `发现 ${suggestions} 条纠词建议，请到词典页审核；尚未加入词典。`
           : '修改已保存，没有新的纠词建议。'}</p>}
+        {diagnosticsOpen && <section className="history-diagnostics" aria-label="诊断日志">
+          <div className="history-diagnostics-heading"><strong>诊断日志</strong><IconButton name="close" label="关闭诊断日志" onClick={() => setDiagnosticsOpen(false)} /></div>
+          {diagnosticsBusy && !diagnostics && <p className="muted">加载中…</p>}
+          {diagnostics && <>
+            <p className="muted">阶段：{diagnostics.summary.stage || '—'}</p>
+            <p>原因：{diagnostics.summary.reason ? errorMessage(diagnostics.summary.reason) : '—'}</p>
+            {!diagnostics.events.length && <p className="muted">无诊断数据</p>}
+            <textarea aria-label="诊断日志内容" readOnly rows={7} value={diagnosticText} />
+            <div className="history-diagnostics-actions">
+              <button disabled={diagnosticsBusy} onClick={() => void api.copy(diagnosticText).then(() => notify('已复制')).catch(e => setDiagnosticsError(errorMessage(e)))}>复制</button>
+              <button disabled={diagnosticsBusy} onClick={() => void exportDiagnostics()}>导出</button>
+            </div>
+          </>}
+          {diagnosticsError && <p className="inline-error" role="alert">{diagnosticsError}</p>}
+        </section>}
         <div className="dialog-actions">
           <Menu label="更多操作" items={[
+            { label: '诊断日志', onSelect: () => void openDiagnostics() },
             ...(typeof parseMeta(record.modeMeta).raw_text === 'string' && parseMeta(record.modeMeta).raw_text.trim() ? [{ label: '恢复识别原文', disabled: busy, onSelect: () => void restore('raw') }] : []),
             ...(record.editedText !== null && record.refinedText ? [{ label: '恢复整理稿', disabled: busy, onSelect: () => void restore('processed') }] : []),
             { label: busy ? '识别中…' : '重新识别', disabled: busy || !audio, onSelect: retry },

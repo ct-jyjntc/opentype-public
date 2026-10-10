@@ -3,6 +3,8 @@
 // 上层服务只消费语义化方法，不接触指针与内存释放细节。
 
 import koffi from 'koffi'
+import { randomUUID } from 'node:crypto'
+import { recordInputDiagnostic } from '../services/input-diagnostics'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { app, screen, systemPreferences } from 'electron'
@@ -53,6 +55,8 @@ const _getCurrentInputState = inputLib.func('getCurrentInputState', voidPtr, [])
 const _captureInputTarget = inputLib.func('captureInputTarget', voidPtr, [])
 const _captureCommandTarget = inputLib.func('captureCommandTarget', voidPtr, [])
 const _prepareInputTarget = inputLib.func('prepareInputTarget', voidPtr, [str])
+const _inputTargetDiagnostics = process.platform === 'darwin' ? inputLib.func('inputTargetDiagnostics', voidPtr, [str]) : undefined
+const traces = new Map<string, string>()
 const _inputTargetReady = inputLib.func('inputTargetReady', voidPtr, [str])
 const _commitInputTarget = inputLib.func('commitInputTarget', voidPtr, [str, str])
 const _verifyInputTarget = inputLib.func('verifyInputTarget', voidPtr, [str])
@@ -71,15 +75,22 @@ function consume(ptr: unknown): string | null {
 
 export const InputHelper = {
   restoreClipboard() { _restoreNativeClipboard?.() },
-  captureTarget(allowReadOnlySelection = false): InputSnapshot {
+  captureTarget(allowReadOnlySelection = false, traceId = randomUUID()): InputSnapshot {
+    recordInputDiagnostic(traceId, 'capture-start')
     try {
-      const target = JSON.parse(consume(allowReadOnlySelection ? _captureCommandTarget() : _captureInputTarget()) ?? '{}') as InputSnapshot
+      const raw = consume(allowReadOnlySelection ? _captureCommandTarget() : _captureInputTarget())
+      if (!raw) throw new Error('empty_bridge_result')
+      const target = JSON.parse(raw) as InputSnapshot & { diagnostics?: Record<string, unknown> }
+      if (!target || typeof target !== 'object' || Array.isArray(target)) throw new Error('invalid_bridge_result')
+      target.traceId = traceId
+      if (target.token) traces.set(target.token, traceId)
+      recordInputDiagnostic(traceId, 'capture-result', { ...target.diagnostics, reason: target.reason, ok: !!target.token })
       if (process.platform === 'win32' && target.windowBounds) target.windowBounds = screen.screenToDipRect(null, target.windowBounds)
       return target
     }
-    catch { return { appName: '', bundleId: '', pid: 0, reason: 'injection_target_unavailable' } }
+    catch { recordInputDiagnostic(traceId, 'capture-bridge', { reason: 'injection_capture_bridge_failed' }); return { traceId, appName: '', bundleId: '', pid: 0, reason: 'injection_capture_bridge_failed' } }
   },
-  releaseTarget(token: string) { _releaseInputTarget(token) },
+  releaseTarget(token: string) { _releaseInputTarget(token); traces.delete(token) },
   /** 在光标处插入纯文本，返回 0 表示成功。 */
   insertText(text: string): number {
     return _insertText(text) as number
@@ -111,7 +122,7 @@ export const InputHelper = {
 export const InputObservation: InputObservationNative = {
   begin: (token, text) => JSON.parse(consume(_beginInputObservation(token, text)) ?? '{}'),
   read: token => JSON.parse(consume(_readInputObservation(token)) ?? '{}'),
-  release: token => _releaseInputTarget(token),
+  release: token => { _releaseInputTarget(token); traces.delete(token) },
 }
 
 function deliveryJSON(value: unknown) {
@@ -130,11 +141,17 @@ function asyncDelivery(fn: ReturnType<koffi.IKoffiLib['func']>, ...args: string[
     }
   }))
 }
+function deliveryDiagnostic(token: string, stage: string, result: Record<string, unknown>) {
+  const traceId = traces.get(token) ?? 'untracked'
+  let metadata: Record<string, unknown> = {}
+  try { if (_inputTargetDiagnostics) metadata = deliveryJSON(_inputTargetDiagnostics(token)) } catch { /* bridge metadata unavailable */ }
+  recordInputDiagnostic(traceId, stage, { ...metadata, ...result })
+}
 export const InputDelivery: InputDeliveryNative = {
-  prepare: token => asyncDelivery(_prepareInputTarget, token),
-  ready: token => deliveryJSON(_inputTargetReady(token)),
-  commit: (token, text) => asyncDelivery(_commitInputTarget, token, text),
-  verify: token => deliveryJSON(_verifyInputTarget(token)),
+  prepare: async token => { deliveryDiagnostic(token, 'prepare-start', {}); try { const result = await asyncDelivery(_prepareInputTarget, token); deliveryDiagnostic(token, 'prepare-result', result); return result } catch (error) { deliveryDiagnostic(token, 'prepare-bridge', { reason: 'injection_prepare_bridge_failed' }); throw new Error('injection_prepare_bridge_failed') } },
+  ready: token => { try { const result = deliveryJSON(_inputTargetReady(token)); deliveryDiagnostic(token, 'ready', result); return result } catch (error) { deliveryDiagnostic(token, 'ready-bridge', { reason: 'injection_ready_bridge_failed' }); throw new Error('injection_ready_bridge_failed') } },
+  commit: async (token, text) => { deliveryDiagnostic(token, 'commit-start', {}); try { const result = await asyncDelivery(_commitInputTarget, token, text); deliveryDiagnostic(token, 'commit-result', result); return result } catch (error) { deliveryDiagnostic(token, 'commit-bridge', { reason: 'injection_commit_bridge_failed' }); throw error } },
+  verify: token => { try { const result = deliveryJSON(_verifyInputTarget(token)); deliveryDiagnostic(token, 'verify', result); return result } catch (error) { deliveryDiagnostic(token, 'verify-bridge', { reason: 'injection_verify_bridge_failed' }); throw error } },
 }
 
 // MARK: - KeyboardHelper：全局热键

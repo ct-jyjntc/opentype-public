@@ -11,6 +11,6 @@ export function capturedContext(target: InputSnapshot, blacklistDomains: string[
   const context = voiceContext({ ...fields, input_context: target.contextText, web_url: target.webUrl,
     redacted: target.contextRedacted === true || blocked }, {}, blacklistDomains)
   return { appName: target.appName, bundleId: target.bundleId, audioContext: context,
-    selectedText: context.redacted ? '' : target.selectedText ?? '', inputToken: target.token, inputError: target.reason,
+    selectedText: context.redacted ? '' : target.selectedText ?? '', inputTraceId: target.traceId, inputToken: target.token, inputError: target.reason,
     inputWebDomains: [...new Set(urls.flatMap(url => { try { const host = new URL(url).hostname; return host ? [host] : [] } catch { return [] } }))] }
 }

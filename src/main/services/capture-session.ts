@@ -17,6 +17,7 @@ export interface CaptureSettings {
   appVersion: string
 }
 export interface CaptureTarget {
+  inputTraceId?: string
   inputToken?: string
   inputError?: string
   inputWebDomains?: string[]
@@ -55,7 +56,7 @@ interface Session {
 export interface CaptureSessionDeps {
   provider: SpeechProvider
   getConfig: () => CaptureSettings
-  context: (mode: CaptureMode, signal: AbortSignal, preview?: boolean) => CaptureTarget | Promise<CaptureTarget>
+  context: (mode: CaptureMode, signal: AbortSignal, preview?: boolean, traceId?: string) => CaptureTarget | Promise<CaptureTarget>
   notify: (state: VoiceState) => void
   flush: (id: string) => Promise<void>
   saveAudio: (id: string, data: Uint8Array) => Promise<string>
@@ -128,7 +129,7 @@ export class CaptureSession {
         ...(options.preview ? { autoInject: false, mode: 'voice_transcript' as const } : {}) }
       this.mode = settings.mode
       this.notify({ phase: 'preparing', audioId: id })
-      target = await this.deps.context(settings.mode, pending.controller.signal, options.preview)
+      target = await this.deps.context(settings.mode, pending.controller.signal, options.preview, id)
       if (this.starting !== pending || pending.controller.signal.aborted) {
         this.deps.releaseTarget?.(target)
         return null

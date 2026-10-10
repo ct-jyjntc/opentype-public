@@ -1,5 +1,6 @@
 export interface InputSnapshot {
   windowBounds?: { x: number; y: number; width: number; height: number }
+  traceId?: string
   token?: string
   reason?: string
   appName: string

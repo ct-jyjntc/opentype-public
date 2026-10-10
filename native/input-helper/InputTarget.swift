@@ -141,17 +141,53 @@ private func targetWebContext(_ element: AXUIElement) -> (urls: [String], redact
     }
     return (urls, true)
 }
+private func targetDiagnostics(_ element: AXUIElement? = nil, app: NSRunningApplication? = nil) -> [String: Any] {
+    let front = NSWorkspace.shared.frontmostApplication
+    var data: [String: Any] = ["trusted": AXIsProcessTrusted(), "frontPid": Int(front?.processIdentifier ?? 0), "frontBundleId": front?.bundleIdentifier ?? "", "targetPid": Int(app?.processIdentifier ?? 0), "targetBundleId": app?.bundleIdentifier ?? ""]
+    var focused: CFTypeRef?
+    let focusError = AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focused)
+    data["focusError"] = focusError.rawValue
+    data["focusReadable"] = targetElement(focused) != nil
+    if let app { data["frontMatches"] = front?.processIdentifier == app.processIdentifier }
+    guard let node = element ?? targetElement(focused) else { return data }
+    data["role"] = targetAttr(node, kAXRoleAttribute as String) as? String ?? ""
+    var pid: pid_t = 0
+    data["pidError"] = AXUIElementGetPid(node, &pid).rawValue
+    if app == nil { data["targetPid"] = Int(pid) }
+    if let focus = targetElement(focused) { data["focusMatches"] = CFEqual(focus, node) }
+    var writable = DarwinBoolean(false)
+    let valueError = AXUIElementIsAttributeSettable(node, kAXValueAttribute as CFString, &writable)
+    data["valueSettable"] = valueError == .success && writable.boolValue
+    writable = DarwinBoolean(false)
+    let rangeError = AXUIElementIsAttributeSettable(node, kAXSelectedTextRangeAttribute as CFString, &writable)
+    data["rangeSettable"] = rangeError == .success && writable.boolValue
+    // Only capability booleans survive; never return values or selected text.
+    data["valueReadable"] = targetAttr(node, kAXValueAttribute as String) is String
+    data["rangeReadable"] = targetRange(node) != nil
+    return data
+}
+
+@_cdecl("inputTargetDiagnostics")
+public func inputTargetDiagnostics(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
+    if let tokenPtr, let target = inputTargets[String(cString: tokenPtr)] { return targetJSON(targetDiagnostics(target.element, app: target.app)) }
+    return targetJSON(targetDiagnostics())
+}
+
 private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePointer<CChar>? {
     let app = NSWorkspace.shared.frontmostApplication
-    var result: [String: Any] = ["appName": app?.localizedName ?? "", "bundleId": app?.bundleIdentifier ?? "", "pid": Int(app?.processIdentifier ?? 0)]
+    var result: [String: Any] = ["diagnostics": targetDiagnostics(app: app), "appName": app?.localizedName ?? "", "bundleId": app?.bundleIdentifier ?? "", "pid": Int(app?.processIdentifier ?? 0)]
     guard AXIsProcessTrusted() else { result["reason"] = "injection_permission"; return targetJSON(result) }
-    guard let app, let focused = targetElement(targetAttr(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as String)) else {
-        result["reason"] = "injection_target_unavailable"; return targetJSON(result)
+    guard let app else { result["reason"] = "injection_front_app_missing"; return targetJSON(result) }
+    var focusValue: CFTypeRef?
+    let focusError = AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focusValue)
+    guard focusError == .success, let focused = targetElement(focusValue) else {
+        result["reason"] = "injection_focus_unavailable"; return targetJSON(result)
     }
+    result["diagnostics"] = targetDiagnostics(focused, app: app)
     var pid: pid_t = 0
-    guard AXUIElementGetPid(focused, &pid) == .success, pid == app.processIdentifier, !secureTarget(focused) else {
-        result["reason"] = "injection_target_unavailable"; result["contextRedacted"] = true; return targetJSON(result)
-    }
+    guard AXUIElementGetPid(focused, &pid) == .success else { result["reason"] = "injection_focus_pid_unavailable"; result["contextRedacted"] = true; return targetJSON(result) }
+    guard pid == app.processIdentifier else { result["reason"] = "injection_focus_pid_mismatch"; result["contextRedacted"] = true; return targetJSON(result) }
+    guard !secureTarget(focused) else { result["reason"] = "injection_secure_target"; result["contextRedacted"] = true; return targetJSON(result) }
     var captureFailure = "injection_target_not_editable"
     let editable = editableTarget(focused, failure: { captureFailure = $0 }), element = editable ?? focused
     if let window = targetElement(targetAttr(element, kAXWindowAttribute as String)),
@@ -200,13 +236,15 @@ private func prepareInputTargetOnMain(_ tokenPtr: UnsafePointer<CChar>?) -> Unsa
     guard let tokenPtr, let target = inputTargets[String(cString: tokenPtr)], !target.submitted else { return targetJSON(["reason": "injection_target_unavailable"]) }
     if let reason = target.valid() { return targetJSON(["reason": reason]) }
     // Activate only this existing process. A closed target is never relaunched.
-    guard target.app.activate(options: [.activateIgnoringOtherApps]) else { return targetJSON(["reason": "injection_target_unavailable"]) }
-    if let window = target.window { _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString) }
-    _ = AXUIElementSetAttributeValue(target.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    let activated = target.app.activate(options: [.activateIgnoringOtherApps])
+    guard activated else { return targetJSON(["reason": "injection_activation_failed", "activateOk": false]) }
+    var result: [String: Any] = ["ok": true, "activateOk": true]
+    if let window = target.window { result["raiseError"] = AXUIElementPerformAction(window, kAXRaiseAction as CFString).rawValue }
+    result["setFocusError"] = AXUIElementSetAttributeValue(target.element, kAXFocusedAttribute as CFString, kCFBooleanTrue).rawValue
     if var range = target.range, let axRange = AXValueCreate(.cfRange, &range) {
-        _ = AXUIElementSetAttributeValue(target.element, kAXSelectedTextRangeAttribute as CFString, axRange)
+        result["setRangeError"] = AXUIElementSetAttributeValue(target.element, kAXSelectedTextRangeAttribute as CFString, axRange).rawValue
     }
-    return targetJSON(["ok": true])
+    return targetJSON(result)
 }
 
 @_cdecl("inputTargetReady")

@@ -1721,6 +1721,10 @@ html.interactive-card-page,
 .interactive-card-page .answer-card header,
 .interactive-card-page .answer-card footer,
 .interactive-card-page .answer-status { flex-shrink: 0; }
+.history-diagnostics { margin-top: 16px; padding: 16px; background: var(--soft); border-radius: 12px; }
+.history-diagnostics-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.history-diagnostics textarea { width: 100%; margin-top: 8px; font-family: ui-monospace, monospace; font-size: 12px; }
+.history-diagnostics-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 .retention-panel { margin-bottom: 26px; }
 .retention-panel + .list-toolbar { margin-bottom: 14px; }
 
