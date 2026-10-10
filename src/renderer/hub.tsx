@@ -568,11 +568,6 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
           <div className="onb-demo">
             <div className="onb-shield"><Icon name="cloud" size={34} /></div>
             <h3>云端还是本地</h3>
-            <ul>
-              <li>云端：不用下载，录音会上传</li>
-              <li>本地：录音不离开电脑，可离线</li>
-              <li>文字整理会把识别出的文字发给 DeepSeek</li>
-            </ul>
           </div>
         ) : (
           <div className="onb-demo">

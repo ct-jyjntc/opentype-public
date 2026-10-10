@@ -183,96 +183,104 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     if (!dirty || await save()) onDone?.()
   }
   const busyModel = status?.state === 'downloading' || status?.state === 'installing' || status?.state === 'checking'
+  const providers: [SpeechProvider, string, string, string][] = [
+    ['siliconflow', 'cloud', '云端', '免下载，上传录音'],
+    ['local', 'drive', '本地', '240 MB，可离线'],
+    ['apple', 'apple', 'Apple', 'macOS 本机识别'],
+  ]
+  const refineFields = <>
+    <div className="asr-row">
+      <span className="asr-row-text">{!onboarding && <strong>文字整理</strong>}<small>去口头禅、理顺标点，翻译和随便问需要它；文字会发给 DeepSeek。</small></span>
+      <Toggle label="文字整理" disabled={preparing} checked={enabled} onChange={value => { changed(); setEnabled(value) }} />
+    </div>
+    {enabled && <label className="asr-field">
+      <span className="asr-field-head">DeepSeek API Key
+        {hasKey && <span className="asr-field-meta">{clearKey ? '保存后清除' : '已保存'}
+          <button type="button" disabled={preparing} className="text-button" onClick={() => { changed(); setKey(''); setClearKey(!clearKey) }}>{clearKey ? '撤销' : '清除'}</button></span>}
+      </span>
+      <input type="password" disabled={preparing} autoComplete="off" spellCheck={false} value={key} onChange={event => { changed(); setKey(event.target.value); setClearKey(false) }} placeholder={hasKey ? '留空则不变' : effectiveRefineKey ? 'sk-…' : 'sk-…（不填则输出识别原文）'} />
+    </label>}
+  </>
   return (
-    <main className={`speech-settings ${embedded ? 'embedded' : ''} ${onboarding ? 'onboarding' : ''}`}>
-      {!onboarding && <h1>听写模型</h1>}
-      {conflict && <div className="speech-conflict" role="alert">
-        <p>设置在别的窗口改过了。</p>
+    <main className={`asr ${embedded ? 'embedded' : ''} ${onboarding ? 'asr-onb' : ''}`}>
+      {!embedded && <h1>听写模型</h1>}
+      {conflict && <div className="asr-status error" role="alert">
+        <span>设置在别的窗口改过了。</span>
         <button disabled={saving || preparing} onClick={() => void reload()}>放弃修改并重新载入</button>
       </div>}
       {!loaded && failed && !conflict && <button onClick={() => void reload()}>重新读取设置</button>}
       <fieldset disabled={!loaded || saving || conflict}>
-        <section>
-          <h2>语音识别</h2>
-          <div role="radiogroup" aria-label="语音识别方式" className="choices">
-            <label className={`choice ${provider === 'siliconflow' ? 'selected' : ''}`}>
-              <input type="radio" disabled={preparing} name="speech-provider" value="siliconflow" checked={provider === 'siliconflow'} onChange={() => { changed(); setProvider('siliconflow') }} />
-              <span><strong>云端</strong><small>录音上传到 SiliconFlow</small></span>
+        <div role="radiogroup" aria-label="语音识别方式" className="asr-providers">
+          {providers.map(([value, icon, title, hint]) => (
+            <label key={value} className={`asr-provider ${provider === value ? 'selected' : ''}`}>
+              <input type="radio" disabled={preparing} name="speech-provider" value={value} checked={provider === value} onChange={() => { changed(); setProvider(value) }} />
+              <Icon name={icon} size={18} />
+              <strong>{title}</strong>
+              <small>{hint}</small>
             </label>
-            <label className={`choice ${provider === 'local' ? 'selected' : ''}`}>
-              <input type="radio" disabled={preparing} name="speech-provider" value="local" checked={provider === 'local'} onChange={() => { changed(); setProvider('local') }} />
-              <span><strong>本地</strong><small>约 240 MB，可离线</small></span>
-            </label>
-            <label className={`choice ${provider === 'apple' ? 'selected' : ''}`}>
-              <input type="radio" disabled={preparing} name="speech-provider" value="apple" checked={provider === 'apple'} onChange={() => { changed(); setProvider('apple') }} />
-              <span><strong>Apple 原生</strong><small>macOS 本机识别</small></span>
-            </label>
-          </div>
-          {provider !== 'local' && provider !== 'siliconflow' && provider !== 'apple' && <p className="note">正在使用旧的语音服务，选一种后保存即可切换。</p>}
-          {provider === 'siliconflow' && <>
-            <label className="key-label">
-              <span className="key-head">SiliconFlow API Key{hasCloudKey && <small>{clearCloudKey ? '保存后清除' : '已保存'}</small>}</span>
-              <input type="password" autoComplete="off" spellCheck={false} value={cloudKey}
-                onChange={event => { changed(); setCloudKey(event.target.value); setClearCloudKey(false) }} placeholder={hasCloudKey ? '留空则不变' : 'sk-…'} />
-            </label>
-            {hasCloudKey && <button type="button" className="key-action" onClick={() => { changed(); setCloudKey(''); setClearCloudKey(!clearCloudKey) }}>{clearCloudKey ? '撤销' : '清除 Key'}</button>}
-            {!effectiveCloudKey && <p className="speech-warning">填上 Key 才能使用云端识别。</p>}
-          </>}
-          {provider === 'apple' && <>
-            <label className="key-label"><span className="key-head">识别语言</span>
-              <select disabled={preparing} value={appleLanguage} onChange={event => { changed(); setAppleLanguage(event.target.value) }}>
-                <option value="auto">跟随系统语言</option>
-                {Array.from(new Set(['zh-CN', 'zh-TW', 'yue-CN', 'en-US', 'ja-JP', 'ko-KR', appleLanguage, ...(appleStatus?.supportedLocales ?? []).map(locale => locale.replaceAll('_', '-'))])).filter(locale => locale !== 'auto').sort().map(locale => <option key={locale} value={locale}>{({ 'zh-CN': '普通话', 'zh-TW': '中文（台湾）', 'yue-CN': '粤语', 'en-US': '英语', 'ja-JP': '日语', 'ko-KR': '韩语' } as Record<string, string>)[locale] ?? locale}</option>)}
-              </select>
-            </label>
-            <div className={`model-status ${appleStatus?.error ? 'error' : appleStatus?.installed ? 'ready' : 'pending'}`} aria-live="polite">
-              <span>{!appleStatus ? '正在检查…' : appleStatus.error ? errorMessage(appleStatus.error) : appleStatus.installed ? '已就绪' : '请先准备 / 授权'}</span>
-              <button disabled={preparing || !appleStatus?.available} onClick={() => void prepareApple()}>准备 / 授权</button>
-              <button disabled={preparing} onClick={() => setAppleRefresh(value => value + 1)}>刷新</button>
-            </div>
-          </>}
-          {provider === 'local' && <div className={`model-status ${status?.state === 'ready' ? 'ready' : status?.error ? 'error' : busyModel ? 'busy' : 'pending'}`} aria-live="polite">
-            {status?.state === 'ready' ? <><Icon name="check" size={15} />{savedProvider === 'local' ? '本地模型已启用' : '模型已就绪'}
-                {savedProvider !== 'local' && <button disabled={preparing} onClick={() => void download()}>启用本地模型</button>}</>
-              : status?.state === 'downloading' || status?.state === 'installing' ? <>
-                <progress value={status.downloaded} max={status.total} /> {Math.floor((status.downloaded / status.total) * 100)}%
-                {!preparing && <button onClick={() => void cancelDownload()}>取消准备</button>}
-              </> : <>
-                <span>{status?.error ?? (status?.state === 'checking' ? '正在检查…' : '模型还没下载')}</span>
-                <button disabled={preparing || !status || status.state === 'checking'} onClick={() => void download()}>{status?.error ? '重试并启用' : '下载并启用'}</button>
-              </>}
+          ))}
+        </div>
+        {provider !== 'local' && provider !== 'siliconflow' && provider !== 'apple' && <p className="asr-note">正在使用旧的语音服务，选一种后保存即可切换。</p>}
+        {provider === 'siliconflow' && <label className="asr-field">
+          <span className="asr-field-head">SiliconFlow API Key
+            {hasCloudKey && <span className="asr-field-meta">{clearCloudKey ? '保存后清除' : '已保存'}
+              <button type="button" className="text-button" onClick={() => { changed(); setCloudKey(''); setClearCloudKey(!clearCloudKey) }}>{clearCloudKey ? '撤销' : '清除'}</button></span>}
+          </span>
+          <input type="password" autoComplete="off" spellCheck={false} value={cloudKey} aria-invalid={!effectiveCloudKey}
+            onChange={event => { changed(); setCloudKey(event.target.value); setClearCloudKey(false) }} placeholder={hasCloudKey ? '留空则不变' : '填上 Key 才能使用云端识别'} />
+        </label>}
+        {provider === 'apple' && <>
+          <label className="asr-field"><span className="asr-field-head">识别语言
+              {!appleStatus?.error && <span className={`asr-field-meta ${appleStatus?.installed ? 'ready' : appleStatus ? 'pending' : ''}`} aria-live="polite">
+                {appleStatus?.installed && <Icon name="check" size={13} />}{!appleStatus ? '正在检查…' : appleStatus.installed ? '已就绪' : '需要准备并授权'}
+                {appleStatus && !appleStatus.installed
+                  ? <button type="button" className="text-button strong" disabled={preparing || !appleStatus.available} onClick={event => { event.preventDefault(); void prepareApple() }}>准备并授权</button>
+                  : <button type="button" className="text-button" disabled={preparing} onClick={event => { event.preventDefault(); setAppleRefresh(value => value + 1) }}>刷新</button>}
+              </span>}
+            </span>
+            <select disabled={preparing} value={appleLanguage} onChange={event => { changed(); setAppleLanguage(event.target.value) }}>
+              <option value="auto">跟随系统语言</option>
+              {Array.from(new Set(['zh-CN', 'zh-TW', 'yue-CN', 'en-US', 'ja-JP', 'ko-KR', appleLanguage, ...(appleStatus?.supportedLocales ?? []).map(locale => locale.replaceAll('_', '-'))])).filter(locale => locale !== 'auto').sort().map(locale => <option key={locale} value={locale}>{({ 'zh-CN': '普通话', 'zh-TW': '中文（台湾）', 'yue-CN': '粤语', 'en-US': '英语', 'ja-JP': '日语', 'ko-KR': '韩语' } as Record<string, string>)[locale] ?? locale}</option>)}
+            </select>
+          </label>
+          {appleStatus?.error && <div className="asr-status error" role="alert">
+            <span>{errorMessage(appleStatus.error)}</span>
+            <span className="asr-status-actions">
+              <button className="text-button" disabled={preparing} onClick={() => setAppleRefresh(value => value + 1)}>刷新</button>
+              <button disabled={preparing || !appleStatus.available} onClick={() => void prepareApple()}>准备并授权</button>
+            </span>
           </div>}
-        </section>
-        <section>
-          <div className="section-title">
-            <h2>文字整理</h2>
-            <Toggle label="文字整理" disabled={preparing} checked={enabled} onChange={value => { changed(); setEnabled(value) }} />
-          </div>
-          <p>去掉口头禅、理顺标点，翻译和随便问也靠它。开启后，识别文字与允许的文字上下文会发送到整理服务。</p>
-          {enabled && <>
-            <label className="key-label">
-              <span className="key-head">DeepSeek API Key{hasKey && <small>{clearKey ? '保存后清除' : '已保存'}</small>}</span>
-              <input type="password" disabled={preparing} autoComplete="off" spellCheck={false} value={key} onChange={event => { changed(); setKey(event.target.value); setClearKey(false) }} placeholder={hasKey ? '留空则不变' : 'sk-…'} />
-            </label>
-            {hasKey && <button type="button" disabled={preparing} className="key-action" onClick={() => { changed(); setKey(''); setClearKey(!clearKey) }}>{clearKey ? '撤销' : '清除 Key'}</button>}
-            {!effectiveRefineKey && <p className="speech-warning">没有 Key 时直接输出识别原文。</p>}
-          </>}
-        </section>
+        </>}
+        {provider === 'local' && <div className={`asr-status ${status?.state === 'ready' ? 'ready' : status?.error ? 'error' : busyModel ? 'busy' : 'pending'}`} aria-live="polite">
+          {status?.state === 'ready' ? <>
+              <span><Icon name="check" size={15} />{savedProvider === 'local' ? '本地模型已启用' : '模型已就绪'}</span>
+              {savedProvider !== 'local' && !onboarding && <button disabled={preparing} onClick={() => void download()}>启用本地模型</button>}
+            </> : status?.state === 'downloading' || status?.state === 'installing' ? <>
+              <progress value={status.downloaded} max={status.total} /><span>{Math.floor((status.downloaded / status.total) * 100)}%</span>
+              {!preparing && <button onClick={() => void cancelDownload()}>取消</button>}
+            </> : <>
+              <span>{status?.error ?? (status?.state === 'checking' ? '正在检查…' : '模型还没下载')}</span>
+              <button disabled={preparing || !status || status.state === 'checking'} onClick={() => void download()}>{status?.error ? '重试' : '下载并启用'}</button>
+            </>}
+        </div>}
+        {onboarding
+          ? <details className="asr-refine"><summary>文字整理（可选）</summary><div className="asr-refine-body">{refineFields}</div></details>
+          : <div className="asr-refine">{refineFields}</div>}
       </fieldset>
-      {preparing && <div className="model-status" role="status">
+      {preparing && <div className="asr-status busy" role="status">
         <span>{provider === 'apple' ? '正在准备 Apple 识别…' : saving ? '正在启用本地模型…' : status?.state === 'checking' ? '正在检查本地模型…' : '正在准备本地模型…'}</span>
-        <button disabled={saving} onClick={() => void cancelDownload()}>取消准备</button>
+        <button disabled={saving} onClick={() => void cancelDownload()}>取消</button>
       </div>}
-      <footer>
+      <div className="asr-actions">
         {onboarding ? <>
           <button className="primary large" disabled={!loaded || saving || preparing || conflict} onClick={() => void next()}>{saving ? '正在保存…' : '继续'} <Icon name="arrow" /></button>
           {onBack && <button className="ghost" disabled={saving || preparing} onClick={onBack}>上一步</button>}
-          <span role={failed ? 'alert' : 'status'} className={failed ? 'speech-warning' : 'muted'}>{failed ? message : ''}</span>
+          {failed && <span role="alert" className="asr-message error">{message}</span>}
         </> : <>
-          <span role={failed ? 'alert' : 'status'} className={failed ? 'speech-warning' : ''}>{message || (dirty ? '有未保存的修改' : '')}</span>
           <button className="primary" disabled={!loaded || saving || preparing || conflict || !dirty} onClick={() => void save()}>{saving ? '正在保存…' : '保存'}</button>
+          <span role={failed ? 'alert' : 'status'} className={`asr-message ${failed ? 'error' : ''}`}>{message || (dirty ? '有未保存的修改' : '')}</span>
         </>}
-      </footer>
+      </div>
     </main>
   )
 }
