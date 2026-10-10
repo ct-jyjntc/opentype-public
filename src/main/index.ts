@@ -49,6 +49,7 @@ import { SecureConfigStore } from './services/secure-store'
 import { applyPendingRefinement, REFINEMENT_SETUP_FILE } from './services/refinement-setup'
 import { LocalAsrProcess } from './services/local-asr/process'
 import { NativeLocalProvider } from './services/providers/native-local'
+import { AppleSpeechProcess, AppleSpeechProvider } from './services/providers/apple-speech'
 import { SenseVoiceModelStore } from './services/local-asr/model-store'
 import { withModelReadiness } from './services/local-asr/ready-engine'
 import { resolveProfilePaths } from './services/profile'
@@ -100,7 +101,8 @@ interface AppConfig {
    * - local：本机 SenseVoice Small，文字整理独立配置
    * - siliconflow：硅基流动 SenseVoice Small，文字整理独立配置
    */
-  provider: 'custom' | 'openai' | 'local' | 'siliconflow'
+  provider: 'custom' | 'openai' | 'local' | 'siliconflow' | 'apple'
+  appleSpeechLanguage: string
   /** OpenAI/本地 provider 的模型名 */
   sttModel: string
   /** 独立的官方文字润色服务；不复用 ASR 密钥 */
@@ -148,6 +150,7 @@ const DEFAULT_CONFIG = {
   cloudBaseUrl: OFFICIAL_BACKEND_URL,
   historyRetentionDays: 90,
   provider: 'siliconflow',
+  appleSpeechLanguage: 'auto',
   sttModel: 'sensevoice-small-int8',
   refineModel: 'deepseek-flash',
   refineBaseUrl: 'https://api.deepseek.com',
@@ -195,7 +198,7 @@ const getPublicConfig = () => {
   // Only settings used by the renderer cross this boundary, never store namespaces or secrets.
   return { mode:c.mode, shortcuts:effectiveShortcuts(), outputLanguage:c.outputLanguage, autoInject:c.autoInject,
     micDeviceId:c.micDeviceId, blacklistDomains:c.blacklistDomains, apiBaseUrl:c.apiBaseUrl,
-    cloudBaseUrl:c.cloudBaseUrl, historyRetentionDays:c.historyRetentionDays, provider:c.provider,
+    cloudBaseUrl:c.cloudBaseUrl, historyRetentionDays:c.historyRetentionDays, provider:c.provider, appleSpeechLanguage:c.appleSpeechLanguage ?? 'auto',
     sttModel:c.sttModel, refineModel:c.refineModel, refineBaseUrl:c.refineBaseUrl,
     enableRefine:c.enableRefine, hasOnboarded:c.hasOnboarded, hasRefineApiKey:!!c.refineApiKey,
     hasApiKey:!!c.apiKey, hasSiliconflowApiKey:!!c.siliconflowApiKey }
@@ -677,6 +680,12 @@ function createAuthService(): AuthService {
  *
  * 严格使用用户选择的协议；云端模式不准备本地模型，也不隐式切换服务。
  */
+let appleSpeech: AppleSpeechProcess | undefined
+function getAppleSpeech() {
+  return appleSpeech ??= new AppleSpeechProcess(app.isPackaged
+    ? join(process.resourcesPath, 'lib/apple-speech/build/AppleSpeech')
+    : join(app.getAppPath(), 'native/apple-speech/build/AppleSpeech'))
+}
 let nativeAsr: LocalAsrProcess | undefined
 let localModels: SenseVoiceModelStore | undefined
 let configGeneration = 0
@@ -710,8 +719,13 @@ function buildProvider(): SpeechProvider {
   const authService = auth
   const refinement = { provider: 'deepseek' as const, baseUrl: c.refineBaseUrl,
     apiKey: c.refineApiKey, model: c.refineModel, enabled: c.enableRefine }
+  if (c.provider === 'apple') {
+    nativeAsr?.dispose(); localModels?.dispose()
+    return new AppleSpeechProvider(getAppleSpeech(), refinement, c.appleSpeechLanguage ?? 'auto')
+  }
   if (c.provider !== 'local') {
     nativeAsr?.dispose()
+    appleSpeech?.dispose()
     localModels?.dispose()
     return createProvider({
       kind: c.provider,
@@ -1835,18 +1849,32 @@ function registerIpc(): void {
     return status
   })
   ipcMain.handle('local-asr:cancel', event => { modelCaller(event); getLocalModels().dispose() })
+  const appleLanguage = (value: unknown) => {
+    if (typeof value !== 'string' || !/^(auto|[a-zA-Z]{2,3}([_-][a-zA-Z0-9]{2,8})*)$/.test(value)) throw new Error('invalid_config')
+    return value
+  }
+  ipcMain.handle('apple-speech:status', (event, language: unknown = 'auto') => {
+    modelCaller(event); return getAppleSpeech().status(appleLanguage(language))
+  })
+  ipcMain.handle('apple-speech:install', (event, language: unknown = 'auto') => {
+    modelCaller(event)
+    if (pipeline.isBusy) throw new Error('请先结束当前听写，再准备模型。')
+    return getAppleSpeech().install(appleLanguage(language))
+  })
+  ipcMain.handle('apple-speech:cancel', event => { modelCaller(event); getAppleSpeech().cancelInstall() })
   ipcMain.handle('config:get', () => getPublicConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<AppConfig>) => {
     if (patch && typeof patch === 'object' && 'cloudBaseUrl' in patch) throw new Error('official_backend_managed')
-    const allowed = new Set(['mode','shortcuts','outputLanguage','autoInject','micDeviceId','blacklistDomains','apiBaseUrl','historyRetentionDays','provider','sttModel','refineModel','refineBaseUrl','refineApiKey','enableRefine','apiKey','siliconflowApiKey'])
+    const allowed = new Set(['mode','shortcuts','outputLanguage','autoInject','micDeviceId','blacklistDomains','apiBaseUrl','historyRetentionDays','provider','appleSpeechLanguage','sttModel','refineModel','refineBaseUrl','refineApiKey','enableRefine','apiKey','siliconflowApiKey'])
     if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key=>!allowed.has(key))) throw new Error('invalid_config')
-    if ('provider' in patch && !['local', 'siliconflow', 'openai', 'custom'].includes(patch.provider!)) throw new Error('invalid_config')
+    if ('provider' in patch && !['local', 'siliconflow', 'openai', 'custom', 'apple'].includes(patch.provider!)) throw new Error('invalid_config')
+    if ('appleSpeechLanguage' in patch) appleLanguage(patch.appleSpeechLanguage)
     if ('siliconflowApiKey' in patch) {
       if (typeof patch.siliconflowApiKey !== 'string' || patch.siliconflowApiKey.length > 1024
         || /[^\x21-\x7e]/.test(patch.siliconflowApiKey.trim())) throw new Error('invalid_config')
       patch = { ...patch, siliconflowApiKey: patch.siliconflowApiKey.trim() }
     }
-    const providerKeys = ['provider', 'apiBaseUrl', 'sttModel', 'refineModel', 'enableRefine', 'apiKey', 'siliconflowApiKey', 'refineBaseUrl', 'refineApiKey']
+    const providerKeys = ['provider', 'appleSpeechLanguage', 'apiBaseUrl', 'sttModel', 'refineModel', 'enableRefine', 'apiKey', 'siliconflowApiKey', 'refineBaseUrl', 'refineApiKey']
     if (pipeline.isBusy && providerKeys.some(key => key in patch)) throw new Error('请先结束当前听写，再修改识别服务')
     patch = networkSettingsPatch(getConfig(), patch)
     if ('historyRetentionDays' in patch && ![-1,7,30,90].includes(patch.historyRetentionDays!)) throw new Error('invalid_retention')
@@ -1857,6 +1885,14 @@ function registerIpc(): void {
       if (generation !== configGeneration) throw new Error('speech_settings_changed')
       if (pipeline.isBusy) throw new Error('请先结束当前听写，再启用本地模型。')
     }
+    if ((patch.provider ?? getConfig().provider) === 'apple' && ('provider' in patch || 'appleSpeechLanguage' in patch)) {
+      const generation = configGeneration
+      const status = await getAppleSpeech().status(patch.appleSpeechLanguage ?? getConfig().appleSpeechLanguage ?? 'auto')
+      if (!status.available || !status.installed) throw new Error(status.error || 'apple_speech_model_missing')
+      if (generation !== configGeneration) throw new Error('speech_settings_changed')
+      if (pipeline.isBusy) throw new Error('请先结束当前听写，再修改识别服务')
+    }
+    if ((patch.provider ?? getConfig().provider) === 'apple') patch = { ...patch, sttModel: 'apple-speech' }
     if ((patch.provider ?? getConfig().provider) === 'local') patch = { ...patch, sttModel: 'sensevoice-small-int8' }
     store?.set(patch as AppConfig)
     configGeneration++
@@ -2195,6 +2231,7 @@ app.on('before-quit', () => {
   skillActions?.dispose()
   localModels?.dispose()
   nativeAsr?.dispose()
+  appleSpeech?.dispose()
   sync?.dispose()
   pipeline?.dispose()
   KeyboardHelper.stopMonitor()

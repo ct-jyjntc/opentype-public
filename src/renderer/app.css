@@ -1938,3 +1938,7 @@ button.about-link svg { flex-shrink: 0; }
 .speech-settings section h2 { margin: 0 !important; }
 .modal .dialog-body.audio-storage > p.storage-summary { margin: 14px 0 0 !important; font-size: 13px !important; color: var(--muted) !important; }
 .modal .dialog-body.audio-storage > p:first-child { margin: 0 0 14px !important; }
+
+.dictionary-sync-panel > .dictionary-sync-heading { margin-bottom: 16px; }
+.dictionary-sync-heading .switch { flex-shrink: 0; }
+.speech-settings .model-status { flex-wrap: wrap; }

@@ -36,6 +36,10 @@
     {
       "from": "native/util-helper/build",
       "to": "lib/util-helper/build"
+    },
+    {
+      "from": "native/apple-speech/build",
+      "to": "lib/apple-speech/build"
     }
   ],
   "mac": {
@@ -61,7 +65,8 @@
     "entitlementsInherit": "build/entitlements.mac.plist",
     "extendInfo": {
       "NSMicrophoneUsageDescription": "需要麦克风权限以进行语音输入。",
-      "NSAppleEventsUsageDescription": "需要向其他应用发送按键事件，以把识别后的文本注入当前输入框。"
+      "NSAppleEventsUsageDescription": "需要向其他应用发送按键事件，以把识别后的文本注入当前输入框。",
+      "NSSpeechRecognitionUsageDescription": "使用 Apple 的本地语音识别将录音转换为文字。"
     }
   },
   "publish": {

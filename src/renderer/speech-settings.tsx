@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
+import type { AppleSpeechStatus } from '../main/services/providers/apple-speech'
 import type { ModelStatus } from '../main/services/local-asr/model-store'
 import { errorMessage } from '../shared/desktop'
 import { Icon, Toggle } from './components/ui'
 
-type SpeechProvider = 'siliconflow' | 'local' | 'openai' | 'custom'
-type SpeechConfig = { provider: SpeechProvider; enableRefine: boolean; hasRefineApiKey: boolean; hasSiliconflowApiKey: boolean }
+type SpeechProvider = 'siliconflow' | 'local' | 'openai' | 'custom' | 'apple'
+type SpeechConfig = { appleSpeechLanguage?: string; provider: SpeechProvider; enableRefine: boolean; hasRefineApiKey: boolean; hasSiliconflowApiKey: boolean }
 
 export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?: boolean; onDone?: () => void; onBack?: () => void }) {
   const onboarding = !!onDone
+  const [appleLanguage, setAppleLanguage] = useState('auto')
+  const [savedAppleLanguage, setSavedAppleLanguage] = useState('auto')
+  const [appleStatus, setAppleStatus] = useState<AppleSpeechStatus>()
+  const [appleRefresh, setAppleRefresh] = useState(0)
   const [provider, setProvider] = useState<SpeechProvider>('siliconflow')
   const [savedProvider, setSavedProvider] = useState<SpeechProvider>('siliconflow')
   const [enabled, setEnabled] = useState(true)
@@ -29,11 +34,13 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
   const [conflict, setConflict] = useState(false)
   const conflictRef = useRef(false)
   const dirtyRef = useRef(false)
-  const dirty = provider !== savedProvider || enabled !== savedEnabled || !!key.trim() || !!cloudKey.trim() || clearKey || clearCloudKey
+  const dirty = appleLanguage !== savedAppleLanguage || provider !== savedProvider || enabled !== savedEnabled || !!key.trim() || !!cloudKey.trim() || clearKey || clearCloudKey
   dirtyRef.current = dirty
   const effectiveCloudKey = !!cloudKey.trim() || (hasCloudKey && !clearCloudKey)
   const effectiveRefineKey = !!key.trim() || (hasKey && !clearKey)
   const applySaved = (config: SpeechConfig) => {
+    setAppleLanguage(config.appleSpeechLanguage ?? 'auto')
+    setSavedAppleLanguage(config.appleSpeechLanguage ?? 'auto')
     setProvider(config.provider)
     setSavedProvider(config.provider)
     setEnabled(config.enableRefine)
@@ -79,6 +86,27 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     const interval = setInterval(refresh, 1000)
     return () => { active = false; clearInterval(interval) }
   }, [loaded, provider])
+  useEffect(() => {
+    if (!loaded || provider !== 'apple') return
+    let active = true
+    setAppleStatus(undefined)
+    void window.opentype.appleSpeech.status(appleLanguage).then(value => {
+      if (active) setAppleStatus(value)
+    }).catch(() => { if (active) setAppleStatus({ available: false, installed: false, error: 'apple_speech_unavailable' }) })
+    return () => { active = false }
+  }, [loaded, provider, appleLanguage, appleRefresh])
+  const prepareApple = async () => {
+    if (!loaded || savingRef.current || preparingRef.current || conflictRef.current) return
+    changed(); preparingRef.current = true; cancelledRef.current = false; setPreparing(true)
+    try {
+      const value = await window.opentype.appleSpeech.install(appleLanguage)
+      if (!mountedRef.current) return
+      setAppleStatus(value)
+      if (value.error && value.error !== 'cancelled') throw new Error(value.error)
+      setMessage(value.error === 'cancelled' ? '已取消' : '已就绪，请保存')
+    } catch (error) { if (mountedRef.current) { setFailed(true); setMessage(errorMessage(error)) } }
+    finally { preparingRef.current = false; if (mountedRef.current) setPreparing(false) }
+  }
   const changed = () => { setMessage(''); setFailed(false) }
   const saveError = (error: unknown) => {
     if (String(error).includes('speech_settings_changed')) {
@@ -117,17 +145,19 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
   const cancelDownload = async () => {
     cancelledRef.current = true
     setMessage('正在取消…')
-    try { await window.opentype.localAsr.cancel() }
+    try { if (provider === 'apple') await window.opentype.appleSpeech.cancel(); else await window.opentype.localAsr.cancel() }
     catch (error) { setFailed(true); setMessage(errorMessage(error)) }
   }
   const save = async (): Promise<boolean> => {
     if (!loaded || conflict || savingRef.current || preparingRef.current) return false
+    if (provider === 'apple' && !appleStatus?.installed) { setFailed(true); setMessage(errorMessage(appleStatus?.error || 'apple_speech_model_missing')); return false }
     savingRef.current = true
     setSaving(true)
     changed()
     try {
       const result = await window.opentype.config.set({
         ...(provider !== savedProvider ? { provider } : {}),
+        ...(appleLanguage !== savedAppleLanguage ? { appleSpeechLanguage: appleLanguage } : {}),
         ...(enabled !== savedEnabled ? { enableRefine: enabled } : {}),
         ...(cloudKey.trim() ? { siliconflowApiKey: cloudKey.trim() } : clearCloudKey ? { siliconflowApiKey: '' } : {}),
         ...(key.trim() ? { refineApiKey: key.trim() } : clearKey ? { refineApiKey: '' } : {}),
@@ -149,6 +179,7 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     if (provider === 'local' && status?.state !== 'ready') {
       setFailed(true); setMessage('请先准备本地模型，再继续。'); return
     }
+    if (provider === 'apple' && !appleStatus?.installed) { setFailed(true); setMessage(errorMessage(appleStatus?.error || 'apple_speech_model_missing')); return }
     if (!dirty || await save()) onDone?.()
   }
   const busyModel = status?.state === 'downloading' || status?.state === 'installing' || status?.state === 'checking'
@@ -172,8 +203,12 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
               <input type="radio" disabled={preparing} name="speech-provider" value="local" checked={provider === 'local'} onChange={() => { changed(); setProvider('local') }} />
               <span><strong>本地</strong><small>约 240 MB，可离线</small></span>
             </label>
+            <label className={`choice ${provider === 'apple' ? 'selected' : ''}`}>
+              <input type="radio" disabled={preparing} name="speech-provider" value="apple" checked={provider === 'apple'} onChange={() => { changed(); setProvider('apple') }} />
+              <span><strong>Apple 原生</strong><small>macOS 本机识别</small></span>
+            </label>
           </div>
-          {provider !== 'local' && provider !== 'siliconflow' && <p className="note">正在使用旧的语音服务，选一种后保存即可切换。</p>}
+          {provider !== 'local' && provider !== 'siliconflow' && provider !== 'apple' && <p className="note">正在使用旧的语音服务，选一种后保存即可切换。</p>}
           {provider === 'siliconflow' && <>
             <label className="key-label">
               <span className="key-head">SiliconFlow API Key{hasCloudKey && <small>{clearCloudKey ? '保存后清除' : '已保存'}</small>}</span>
@@ -182,6 +217,19 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
             </label>
             {hasCloudKey && <button type="button" className="key-action" onClick={() => { changed(); setCloudKey(''); setClearCloudKey(!clearCloudKey) }}>{clearCloudKey ? '撤销' : '清除 Key'}</button>}
             {!effectiveCloudKey && <p className="speech-warning">填上 Key 才能使用云端识别。</p>}
+          </>}
+          {provider === 'apple' && <>
+            <label className="key-label"><span className="key-head">识别语言</span>
+              <select disabled={preparing} value={appleLanguage} onChange={event => { changed(); setAppleLanguage(event.target.value) }}>
+                <option value="auto">跟随系统语言</option>
+                {Array.from(new Set(['zh-CN', 'zh-TW', 'yue-CN', 'en-US', 'ja-JP', 'ko-KR', appleLanguage, ...(appleStatus?.supportedLocales ?? []).map(locale => locale.replaceAll('_', '-'))])).filter(locale => locale !== 'auto').sort().map(locale => <option key={locale} value={locale}>{({ 'zh-CN': '普通话', 'zh-TW': '中文（台湾）', 'yue-CN': '粤语', 'en-US': '英语', 'ja-JP': '日语', 'ko-KR': '韩语' } as Record<string, string>)[locale] ?? locale}</option>)}
+              </select>
+            </label>
+            <div className={`model-status ${appleStatus?.error ? 'error' : appleStatus?.installed ? 'ready' : 'pending'}`} aria-live="polite">
+              <span>{!appleStatus ? '正在检查…' : appleStatus.error ? errorMessage(appleStatus.error) : appleStatus.installed ? '已就绪' : '请先准备 / 授权'}</span>
+              <button disabled={preparing || !appleStatus?.available} onClick={() => void prepareApple()}>准备 / 授权</button>
+              <button disabled={preparing} onClick={() => setAppleRefresh(value => value + 1)}>刷新</button>
+            </div>
           </>}
           {provider === 'local' && <div className={`model-status ${status?.state === 'ready' ? 'ready' : status?.error ? 'error' : busyModel ? 'busy' : 'pending'}`} aria-live="polite">
             {status?.state === 'ready' ? <><Icon name="check" size={15} />{savedProvider === 'local' ? '本地模型已启用' : '模型已就绪'}
@@ -212,7 +260,7 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
         </section>
       </fieldset>
       {preparing && <div className="model-status" role="status">
-        <span>{saving ? '正在启用本地模型…' : status?.state === 'checking' ? '正在检查本地模型…' : '正在准备本地模型…'}</span>
+        <span>{provider === 'apple' ? '正在准备 Apple 识别…' : saving ? '正在启用本地模型…' : status?.state === 'checking' ? '正在检查本地模型…' : '正在准备本地模型…'}</span>
         <button disabled={saving} onClick={() => void cancelDownload()}>取消准备</button>
       </div>}
       <footer>

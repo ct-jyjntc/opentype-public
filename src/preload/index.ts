@@ -64,6 +64,11 @@ const CH = {
 
 const api = {
   desktop,
+  appleSpeech: {
+    cancel: () => ipcRenderer.invoke('apple-speech:cancel'),
+    status: (language = 'auto') => ipcRenderer.invoke('apple-speech:status', language) as Promise<import('../main/services/providers/apple-speech').AppleSpeechStatus>,
+    install: (language = 'auto') => ipcRenderer.invoke('apple-speech:install', language) as Promise<import('../main/services/providers/apple-speech').AppleSpeechStatus>,
+  },
   localAsr: {
     status: () => ipcRenderer.invoke('local-asr:status'),
     install: () => ipcRenderer.invoke('local-asr:install'),

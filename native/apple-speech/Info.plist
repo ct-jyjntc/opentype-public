@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>dev.opentype.desktop.apple-speech</string>
+<key>CFBundleName</key><string>OpenType</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>使用 Apple 的本地语音识别将录音转换为文字。</string>
+</dict></plist>

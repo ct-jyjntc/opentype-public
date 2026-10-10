@@ -36,4 +36,9 @@ mkdir -p "$NATIVE/output-audio/build"
 swiftc -O -target "$ARCH-apple-macosx13.0" -framework CoreAudio \
   "$NATIVE/output-audio/OutputAudio.swift" -o "$NATIVE/output-audio/build/OutputAudio"
 
+mkdir -p "$NATIVE/apple-speech/build"
+swiftc -parse-as-library -O -target "$ARCH-apple-macosx13.0" -framework Speech -framework AVFoundation \
+  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$NATIVE/apple-speech/Info.plist" \
+  "$NATIVE/apple-speech/AppleSpeech.swift" -o "$NATIVE/apple-speech/build/AppleSpeech"
+
 echo "done"
