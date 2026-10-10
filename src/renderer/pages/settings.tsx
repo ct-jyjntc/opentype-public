@@ -542,15 +542,18 @@ function Account({ notify }: { notify: (s: string) => void }) {
   }
   return (
     <>
-      <div className="account-card">
-        <div className="avatar">
-          <Icon name="user" size={28} />
-        </div>
-        <h2>{logged ? '已登录' : 'OpenType 账户'}</h2>
-        <p>不登录也能听写。登录后可通过 OpenType 官方服务同步历史和词典。</p>
-      </div>
+      {logged && accountLoaded && <div className="account-head">
+        <div><h2>已登录</h2><p>历史和词典可以在设备间同步。</p></div>
+        <button disabled={busy} onClick={async () => {
+          if (authPending.current) return
+          authPending.current = true; setBusy(true); setError('')
+          try { await api.auth.logout(); setLogged(false); setPassword('') }
+          catch (e) { setError(errorMessage(e)) }
+          finally { authPending.current = false; setBusy(false) }
+        }}>退出登录</button>
+      </div>}
       {!accountLoaded ? <p role="status">{error ? <button onClick={() => void loadAccount()}>重新读取账户状态</button> : '正在读取账户状态…'}</p> : !logged ? (
-        <form
+        <form className="auth-form"
           onSubmit={async (e) => {
             e.preventDefault()
             if (authPending.current || busy || !accountLoaded) return
@@ -576,6 +579,7 @@ function Account({ notify }: { notify: (s: string) => void }) {
             }
           }}
         >
+          <div className="auth-title"><h2>{register ? '注册 OpenType' : '登录 OpenType'}</h2><p>同步历史和词典。不登录也能听写。</p></div>
           <label className="field">
             邮箱
             <input
@@ -601,22 +605,12 @@ function Account({ notify }: { notify: (s: string) => void }) {
           </label>
           <AccountChallenge key={`${register ? 'register' : 'login'}-${challengeAttempt}`} action={register ? 'register' : 'login'}
             disabled={busy} onToken={setChallengeToken} />
-          <div className="dialog-actions">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setChallengeToken(null)
-                setRegister(!register)
-                setError('')
-              }}
-            >
-              {register ? '已有账户，去登录' : '注册账户'}
-            </button>
-            <button className="primary" disabled={busy || challengeToken === null}>
-              {busy ? '处理中…' : register ? '注册并登录' : '登录'}
-            </button>
-          </div>
+          <button className="primary auth-submit" disabled={busy || challengeToken === null}>
+            {busy ? '处理中…' : register ? '注册并登录' : '登录'}
+          </button>
+          <p className="auth-switch">{register ? '已有账户？' : '还没有账户？'}
+            <button type="button" className="link" disabled={busy} onClick={() => { setChallengeToken(null); setRegister(!register); setError('') }}>
+              {register ? '去登录' : '注册'}</button></p>
         </form>
       ) : (
         <>
@@ -648,42 +642,23 @@ function Account({ notify }: { notify: (s: string) => void }) {
               <option value={7}>7 天</option>
             </select>
           </Row>
-          {sync && <p className="muted">云端现有 {sync.total ?? 0} 条历史。{sync.cloud_lifecycle_version !== 1 && '云端保留和清空暂不可用，请稍后重试。'}</p>}
-          <div className="dialog-actions">
-            <button disabled={busy || phase === 'clearing_cloud'} onClick={async () => {
-              setBusy(true); setError('')
-              try { await refreshSync() } catch (e) { setError(errorMessage(e)) } finally { setBusy(false) }
-            }}>刷新同步状态</button>
-            <button
-              disabled={busy || !sync?.sync_enabled || phase === 'pushing' || phase === 'clearing_cloud'}
-              onClick={() =>
-                void api.sync
-                  .pushNow()
-                  .then(r => { if (r.detail) throw new Error(r.detail) })
-                  .then(() => api.sync.pull())
-                  .then(r => { if (r.detail) throw new Error(r.detail) })
-                  .then(refreshSync)
-                  .then(() => notify('同步请求已完成'))
-                  .catch((e) => setError(errorMessage(e)))
-              }
-            >
-              立即同步
-            </button>
-            <button className="danger" disabled={busy || phase === 'clearing_cloud' || sync?.cloud_lifecycle_version !== 1}
-              onClick={() => setConfirmWipe(true)}>{pendingCloudWipe ? '确认上次清空结果' : '清空云端历史'}</button>
-            <button
-              disabled={busy}
-              onClick={async () => {
-                if (authPending.current) return
-                authPending.current = true; setBusy(true); setError('')
-                try { await api.auth.logout(); setLogged(false); setPassword('') }
-                catch (e) { setError(errorMessage(e)) }
-                finally { authPending.current = false; setBusy(false) }
-              }}
-            >
-              退出登录
-            </button>
-          </div>
+          <Row title="云端历史" description={sync ? `云端现有 ${sync.total ?? 0} 条。${sync.cloud_lifecycle_version !== 1 ? '保留和清空暂不可用。' : ''}` : '正在读取…'}>
+            <div className="row-actions">
+              <button disabled={busy || !sync?.sync_enabled || phase === 'pushing' || phase === 'clearing_cloud'}
+                onClick={() =>
+                  void api.sync
+                    .pushNow()
+                    .then(r => { if (r.detail) throw new Error(r.detail) })
+                    .then(() => api.sync.pull())
+                    .then(r => { if (r.detail) throw new Error(r.detail) })
+                    .then(refreshSync)
+                    .then(() => notify('同步完成'))
+                    .catch((e) => setError(errorMessage(e)))
+                }>{phase === 'pushing' ? '同步中…' : '立即同步'}</button>
+              <button className="danger-text" disabled={busy || phase === 'clearing_cloud' || sync?.cloud_lifecycle_version !== 1}
+                onClick={() => setConfirmWipe(true)}>{pendingCloudWipe ? '确认上次清空' : '清空'}</button>
+            </div>
+          </Row>
           {pendingDeletions > 0 && <p className="muted">待云端确认删除：{pendingDeletions} 条，联网后自动同步。</p>}
           {cloudExcluded > 0 && <p className="muted">{cloudExcluded} 条记录因云端清空或到期仅保留在本机，不会再次自动上传。</p>}
         </>
@@ -745,7 +720,7 @@ function About() {
     }).catch(e => { if (alive) setError(errorMessage(e)) })
     return () => { alive = false; off() }
   }, [])
-  const status = update.message || ({checking:'正在检查…',current:'已是最新版本',available:`发现新版本 ${update.version ?? ''}`,downloading:`正在下载 ${Math.round(update.percent??0)}%`,ready:'更新已下载',installing:'正在安装更新…',cancelled:'下载已取消',error:'更新失败',unavailable:'此版本不支持自动更新'} as Record<string,string>)[update.phase]
+  const status = update.message || ({checking:'正在检查…',current:'已是最新版本',available:`发现新版本 ${update.version ?? ''}`,downloading:`正在下载 ${update.version ?? ''} · ${Math.round(update.percent??0)}%`,ready:'更新已下载',installing:'正在安装更新…',cancelled:'下载已取消',error:'更新失败',unavailable:'此版本不支持自动更新'} as Record<string,string>)[update.phase]
   const open = (url: string) => void api.desktop.openUrl(url).catch(e => setError(errorMessage(e)))
   return (
     <div className="about-list">
@@ -753,6 +728,11 @@ function About() {
         <div>
           <strong>版本</strong>
           <span aria-live="polite">{version ? `v${version.replace(/^v/, '')}` : ''}{status ? ` · ${status}` : ''}</span>
+          {update.phase === 'downloading' && <div className="update-progress" role="progressbar" aria-label="更新下载进度"
+            aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(update.percent ?? 0)}>
+            <i style={{ width: `${Math.max(2, Math.min(100, update.percent ?? 0))}%` }} />
+            {update.total ? <small>{(((update.transferred ?? 0)) / 1048576).toFixed(1)} / {(update.total / 1048576).toFixed(1)} MB</small> : null}
+          </div>}
         </div>
         {update.phase === 'available' ? <button className="primary" disabled={busy} onClick={() => void change(() => api.desktop.updater.download())}>下载更新</button>
           : update.phase === 'downloading' ? <button onClick={() => void api.desktop.updater.cancel().then(setUpdate).catch(e => setError(errorMessage(e)))}>取消下载</button>
@@ -760,7 +740,6 @@ function About() {
           : update.phase === 'installing' ? <button disabled>正在安装…</button>
           : <button disabled={busy} onClick={() => void change(() => api.desktop.updater.check(update.channel))}>{update.phase === 'checking' ? '正在检查…' : '检查更新'}</button>}
       </div>
-      {update.phase === 'downloading' && <progress value={update.percent ?? 0} max={100} aria-label="更新下载进度" />}
       {update.phase === 'ready' && <p className="about-note">安装会关闭应用并重启，请先保存尚未保留的文字。</p>}
       {update.releaseNotes && <details className="about-notes"><summary>版本说明 · {update.version}</summary><Markdown text={update.releaseNotes} /></details>}
       {error && <p className="inline-error" role="alert">{error}</p>}

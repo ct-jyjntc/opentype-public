@@ -65,13 +65,13 @@ export function AccountChallenge({ action, disabled, onToken }: {
 
   if (status === 'disabled') return null
   const src = `${AUTH_CHALLENGE_PAGE}?request_id=${encodeURIComponent(requestId)}&action=${action}`
-  return <div className="field" aria-label="账户安全验证">
-    <span>安全验证</span>
+  const note = status === 'verified' ? '' : status === 'expired' ? '验证已过期' : status === 'error' ? detail || '验证暂时不可用'
+    : status === 'loading' ? '正在加载验证…' : ''
+  return <div className="challenge" aria-label="账户安全验证">
     {config?.required && <iframe ref={frame} key={requestId} src={src} title="Cloudflare 安全验证"
-      sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer"
-      style={{ width: '100%', height: 180, border: 0, colorScheme: 'light' }} />}
-    <span role="status" className="muted">{status === 'verified' ? '验证完成' : status === 'expired' ? '验证已过期，请重新验证'
-      : status === 'error' ? detail || '验证暂时不可用，请重试' : status === 'loading' ? '正在加载验证…' : '请完成上方安全验证'}</span>
-    {status !== 'verified' && <button type="button" disabled={disabled} onClick={() => setAttempt(value => value + 1)}>重新加载验证</button>}
+      sandbox="allow-scripts allow-same-origin" referrerPolicy="no-referrer" />}
+    {note && <p role="status" className="challenge-note">{note}
+      {(status === 'expired' || status === 'error') && <button type="button" className="link" disabled={disabled} onClick={() => setAttempt(value => value + 1)}>重新验证</button>}
+    </p>}
   </div>
 }

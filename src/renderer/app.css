@@ -1846,3 +1846,58 @@ button.about-link svg { flex-shrink: 0; }
 .asr-field-meta.ready { color: var(--ok); font-weight: 600; }
 .asr-field-meta.pending { color: var(--warn); font-weight: 600; }
 .asr .text-button.strong { color: var(--text); font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+
+/* ── Account & update (2026-10) ─────────────────────────────── */
+button.link { border: 0; background: none; padding: 0 2px; min-height: 0; color: var(--text); font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+button.link:disabled { opacity: 0.5; }
+.auth-form { display: grid; gap: 12px; max-width: 400px; padding-top: 4px; }
+.auth-title h2 { margin: 0; font-size: 20px; font-weight: 750; letter-spacing: -0.3px; }
+.auth-title p { margin: 4px 0 4px; font-size: 13px; color: var(--muted); }
+.auth-form .field { margin: 0; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text2); }
+.auth-form .field input { background: var(--soft); border: 1.5px solid transparent; border-radius: 11px; padding: 10px 13px; font-weight: 400; }
+.auth-form .field input:focus { outline: none; background: var(--card); border-color: var(--accent); }
+.challenge { display: grid; gap: 4px; }
+.challenge iframe { width: 100%; height: 66px; border: 0; color-scheme: light; border-radius: 10px; }
+.challenge-note { margin: 0; font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.auth-submit { min-height: 40px; border-radius: 11px; font-weight: 600; background: var(--text); color: var(--bg); border-color: var(--text); }
+.auth-submit:disabled { opacity: 0.45; }
+.auth-switch { margin: 0; font-size: 13px; color: var(--muted); text-align: center; }
+.account-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 0 10px; max-width: 760px; }
+.account-head h2 { margin: 0; font-size: 18px; font-weight: 700; }
+.account-head p { margin: 3px 0 0; font-size: 13px; color: var(--muted); }
+.account-head > button { min-height: 34px; padding: 0 16px; border-radius: 999px; }
+.row-actions { display: flex; gap: 8px; align-items: center; }
+.row-actions button { min-height: 32px; padding: 0 14px; border-radius: 999px; }
+.row-actions button.danger-text { color: var(--danger); background: none; border-color: transparent; }
+.update-progress { position: relative; display: grid; gap: 6px; margin-top: 8px; width: min(420px, 100%); }
+.update-progress::before { content: ''; grid-area: 1 / 1; height: 6px; border-radius: 999px; background: var(--soft); }
+.update-progress > i { grid-area: 1 / 1; height: 6px; border-radius: 999px; background: var(--text); transition: width 0.3s ease; }
+.update-progress small { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.about-notes { margin: 0 0 6px; }
+.about-notes summary { cursor: pointer; }
+.about-row > div > span { font-variant-numeric: tabular-nums; }
+/* Action row: buttons never shrink; the message takes the rest and wraps on its own. */
+.asr-actions { flex-wrap: wrap; }
+.asr-actions > button { flex-shrink: 0; white-space: nowrap; }
+.asr-actions .asr-message { flex: 1 1 220px; min-width: 0; line-height: 1.5; }
+.asr-provider small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Onboarding at short windows (min 580px tall): tighten so no step needs scrolling */
+@media (max-height: 680px) {
+  .onb-brand { top: 20px; }
+  .onb-main, .onb-main:has(.asr-onb) { padding-top: 72px; padding-bottom: 16px; }
+  .onb-progress { margin-bottom: 16px; }
+  .onboarding h1 { font-size: 28px; margin-bottom: 6px; }
+  .onboarding .onb-main > p, .onb-main:has(.asr-onb) > p { margin-bottom: 14px; line-height: 1.6; }
+  .onboarding-permissions { gap: 6px; margin-bottom: 14px; }
+  .perm-item { padding: 8px 12px; }
+  .perm-icon { width: 30px; height: 30px; }
+  .onboarding .onboarding-tips { margin-bottom: 14px; }
+  .onboarding .asr.asr-onb, .onboarding .asr.asr-onb fieldset { gap: 10px; }
+  .onboarding .onb-actions .large, .onboarding .onb-actions .ghost,
+  .onboarding .asr.asr-onb .asr-actions .large, .onboarding .asr.asr-onb .asr-actions .ghost { min-height: 42px; }
+}
+@media (max-height: 680px) and (max-width: 850px) {
+  .onb-main { max-width: 640px; margin: 0 auto; }
+  .onboarding .asr.asr-onb, .onboarding-permissions { max-width: 560px; }
+}
