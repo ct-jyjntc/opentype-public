@@ -155,16 +155,23 @@ function SkillWorkbench({ settings }: { settings: SkillSettings }) {
     catch(e){if(current.current===id)setError(errorMessage(e))}
     finally{if(current.current===id){current.current=undefined;setBusy(false);setPreview('')}}
   }
-  return <section className="skill-workbench"><h2>文字工作台</h2><p className="muted">粘贴一段文字试试效果。</p>
-    <div className="skill-toolbar"><select aria-label="文字工作台 Skill" value={skillId} disabled={busy} onChange={e=>setSelected(e.target.value)}>{available.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
+  const stale=!!result && (resultFor?.source!==source || resultFor?.skillId!==skillId)
+  return <section className="skill-workbench">
+    <h2>文字工作台</h2><p className="muted">粘贴一段文字试试效果。</p>
+    <div className="wb-toolbar"><select aria-label="文字工作台 Skill" value={skillId} disabled={busy} onChange={e=>setSelected(e.target.value)}>{available.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>
       <button className="primary" disabled={busy||!settings.enabled||!skillId||!source.trim()} onClick={()=>void run()}>{busy?'正在处理…':'处理文字'}</button>
-      {busy&&<button onClick={()=>{const id=current.current;current.current=undefined;setBusy(false);setPreview('');setError('已取消');if(id)void api.skills.cancel(id).catch(()=>{})}}>取消</button>}
-      <button disabled={!result} onClick={()=>void api.copy(result).catch(e=>setError(errorMessage(e)))}>复制结果</button></div>
-    <div className="skill-text-columns"><label className="field">原文<textarea rows={8} value={source} onChange={e=>setSource(e.target.value)} disabled={busy}/></label><div className="field">
-      <div className="skill-toolbar"><span>{busy?'正在生成 · 预览尚未完成':result && (resultFor?.source!==source || resultFor?.skillId!==skillId)?'上一次处理结果':'处理结果'}</span>
-        <button disabled={busy} onClick={()=>setView(view==='read'?'edit':'read')}>{view==='read'?'编辑原文':'阅读视图'}</button></div>
-      {busy || view==='read' ? <div className="skill-result" aria-busy={busy}><Markdown text={busy?preview||'等待回复…':result}/></div> : <textarea aria-label="编辑处理结果" rows={8} value={result} onChange={e=>setResult(e.target.value)}/>}
-    </div></div>
+      {busy&&<button onClick={()=>{const id=current.current;current.current=undefined;setBusy(false);setPreview('');setError('已取消');if(id)void api.skills.cancel(id).catch(()=>{})}}>取消</button>}</div>
+    <div className="wb-columns">
+      <div className="wb-col"><div className="wb-col-head"><label htmlFor="wb-source">原文</label></div>
+        <textarea id="wb-source" value={source} onChange={e=>setSource(e.target.value)} disabled={busy} placeholder="粘贴或输入文字"/></div>
+      <div className="wb-col"><div className="wb-col-head"><span>{busy?'正在生成…':stale?'上一次处理结果':'处理结果'}</span>
+        <span className="wb-col-actions">
+          <button className="text-button" disabled={busy||!result} onClick={()=>setView(view==='read'?'edit':'read')}>{view==='read'?'编辑':'预览'}</button>
+          <button className="text-button" disabled={!result} onClick={()=>void api.copy(result).catch(e=>setError(errorMessage(e)))}><Icon name="copy" size={13} />复制</button>
+        </span></div>
+        {busy || view==='read' ? <div className="skill-result" aria-busy={busy}>{busy||result?<Markdown text={busy?preview||'等待回复…':result}/>:<span className="wb-empty">处理后的文字会显示在这里</span>}</div> : <textarea aria-label="编辑处理结果" value={result} onChange={e=>setResult(e.target.value)}/>}
+      </div>
+    </div>
     {error&&<p role="status" className="inline-error">{error}</p>}
   </section>
 }
