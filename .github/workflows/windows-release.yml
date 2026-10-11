@@ -25,10 +25,11 @@ jobs:
       - name: Verify the exact source commit and stable version
         env:
           RELEASE_SHA: ${{ github.sha }}
+          RELEASE_GITHUB_TOKEN: ${{ github.token }}
         run: |
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           test "$(node -p "require('./package.json').version")" = "0.2.2"
-          node -e "fetch('https://api.github.com/repos/ct-jyjntc/opentype-public/commits/' + process.env.RELEASE_SHA, {headers:{'User-Agent':'OpenType-release-builder'}}).then(async r => { if (!r.ok || (await r.json()).sha !== process.env.RELEASE_SHA) process.exit(1) })"
+          node -e "fetch('https://api.github.com/repos/ct-jyjntc/opentype-public/commits/' + process.env.RELEASE_SHA, {headers:{'User-Agent':'OpenType-release-builder','Authorization':'Bearer ' + process.env.RELEASE_GITHUB_TOKEN}}).then(async r => { if (!r.ok || (await r.json()).sha !== process.env.RELEASE_SHA) process.exit(1) })"
       - name: Download and verify pinned SenseVoice model
         env:
           SENSEVOICE_MODEL_DIR: tmp/release-${{ github.run_id }}/models/sensevoice-int8
@@ -69,9 +70,10 @@ jobs:
         env:
           RELEASE_SHA: ${{ github.sha }}
           EXPECTED_ARCH: ${{ matrix.arch }}
+          RELEASE_GITHUB_TOKEN: ${{ github.token }}
         run: |
           if ((git rev-parse HEAD).Trim() -ne $env:RELEASE_SHA) { throw 'Checkout does not match the workflow source commit.' }
-          $remote = Invoke-RestMethod -Headers @{ 'User-Agent'='OpenType-release-builder' } -Uri "https://api.github.com/repos/ct-jyjntc/opentype-public/commits/$env:RELEASE_SHA"
+          $remote = Invoke-RestMethod -Headers @{ 'User-Agent'='OpenType-release-builder'; 'Authorization'="Bearer $env:RELEASE_GITHUB_TOKEN" } -Uri "https://api.github.com/repos/ct-jyjntc/opentype-public/commits/$env:RELEASE_SHA"
           if ($remote.sha -ne $env:RELEASE_SHA) { throw 'The source commit is not confirmed by the GitHub API.' }
           if ((node -p 'process.arch').Trim() -ne $env:EXPECTED_ARCH) { throw 'Node is not running natively for the package architecture.' }
           if ((node -p "require('./package.json').version").Trim() -ne '0.2.2') { throw 'The package version is not 0.2.2.' }
