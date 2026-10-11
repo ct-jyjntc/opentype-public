@@ -435,6 +435,7 @@ std::string commitContextEdit(Target& target,const std::wstring& text,const std:
     if(!strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))throw std::runtime_error("injection_target_changed");
     if(clipboardLease&&(!clipboardLease->active()||GetClipboardSequenceNumber()!=sequence))throw std::runtime_error("injection_clipboard_changed");
     if(modifiersHeld())throw std::runtime_error("injection_keys_held");
+    if(!strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))throw std::runtime_error("injection_target_changed");
   }catch(const std::exception& error){
     restoreClipboard();target.expected.clear();target.inserted.clear();target.hasObservationBase=false;
     if(strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)&&originalSelection)originalSelection->Select();
