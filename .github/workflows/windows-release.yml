@@ -1,0 +1,210 @@
+name: Windows stable build (build-only)
+
+on:
+  push:
+    branches: [codex/windows-beta6-build]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Verify the exact source commit and stable version
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(node -p "require('./package.json').version")" = "0.2.2"
+          node -e "fetch('https://api.github.com/repos/ct-jyjntc/opentype-public/commits/' + process.env.RELEASE_SHA, {headers:{'User-Agent':'OpenType-release-builder'}}).then(async r => { if (!r.ok || (await r.json()).sha !== process.env.RELEASE_SHA) process.exit(1) })"
+      - name: Download and verify pinned SenseVoice model
+        env:
+          SENSEVOICE_MODEL_DIR: tmp/release-${{ github.run_id }}/models/sensevoice-int8
+        run: node scripts/prepare-release-model.mjs
+      - name: Retain one verified model copy for both architecture jobs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SenseVoice-model-${{ github.sha }}
+          path: tmp/release-${{ github.run_id }}/models/sensevoice-int8/
+          if-no-files-found: error
+          retention-days: 3
+
+  package-windows:
+    needs: prepare-model
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out the exact workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up native-architecture Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          architecture: ${{ matrix.arch }}
+          package-manager-cache: false
+      - name: Verify stable source and runner architecture
+        shell: pwsh
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:RELEASE_SHA) { throw 'Checkout does not match the workflow source commit.' }
+          $remote = Invoke-RestMethod -Headers @{ 'User-Agent'='OpenType-release-builder' } -Uri "https://api.github.com/repos/ct-jyjntc/opentype-public/commits/$env:RELEASE_SHA"
+          if ($remote.sha -ne $env:RELEASE_SHA) { throw 'The source commit is not confirmed by the GitHub API.' }
+          if ((node -p 'process.arch').Trim() -ne $env:EXPECTED_ARCH) { throw 'Node is not running natively for the package architecture.' }
+          if ((node -p "require('./package.json').version").Trim() -ne '0.2.2') { throw 'The package version is not 0.2.2.' }
+      - name: Restore the single verified model copy
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v6.0.0
+        with:
+          name: SenseVoice-model-${{ github.sha }}
+          path: tmp/release-${{ github.run_id }}/models/sensevoice-int8
+      - name: Install locked app dependencies
+        run: npm ci
+      - name: Build sherpa-onnx for Windows ARM64 and Electron 33
+        if: ${{ matrix.arch == 'arm64' }}
+        run: ./scripts/build-sherpa-windows-arm64.ps1
+      - name: Build native helpers and production app
+        shell: pwsh
+        env:
+          OPENTYPE_NATIVE_ARCH: ${{ matrix.arch }}
+          OPENTYPE_PACKAGE_ARCH: ${{ matrix.arch }}
+          SENSEVOICE_MODEL_DIR: tmp/release-${{ github.run_id }}/models/sensevoice-int8
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx electron-builder --config electron-builder.windows.stable.cjs --win nsis --${{ matrix.arch }} --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run packaged Electron 33 and local SenseVoice on a public speech oracle
+        shell: pwsh
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+          SENSEVOICE_MODEL_DIR: tmp/release-${{ github.run_id }}/models/sensevoice-int8
+        run: |
+          $taskDir = Join-Path 'tmp' 'release-${{ github.run_id }}'
+          $fixture = Join-Path $taskDir 'librispeech-1272-128104-0000.wav'
+          New-Item -ItemType Directory -Path $taskDir -Force | Out-Null
+          Invoke-WebRequest 'https://raw.githubusercontent.com/venetanji/rt-agent/claude/sharp-volta-wt499g/tests/fixtures/audio/librispeech-1272-128104-0000.wav' -OutFile $fixture
+          $digest = (Get-FileHash -Algorithm SHA256 $fixture).Hash.ToLowerInvariant()
+          if ($digest -ne '799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46') { throw 'LibriSpeech oracle WAV hash mismatch.' }
+          $asrScript = Join-Path $taskDir 'verify-packaged-asr.cjs'
+          $asrSource = @'
+          const path = require('node:path'), { createRequire } = require('node:module');
+          (async () => {
+            const [wav, expectedArch] = process.argv.slice(2);
+            if (process.platform !== 'win32' || process.arch !== expectedArch) throw Error(`wrong runtime ${process.platform}/${process.arch}`);
+            const fromApp = createRequire(path.join(process.resourcesPath, 'app.asar', 'dist/main/sensevoice-worker.js'));
+            const Database = fromApp('better-sqlite3');
+            const db = new Database(':memory:'); db.prepare('select 1').get(); db.close();
+            const koffi = fromApp('koffi');
+            const sherpa = fromApp('sherpa-onnx-node');
+            const { OfflineRecognizer } = sherpa;
+            const { samples, sampleRate } = sherpa.readWave(wav);
+            const modelDir = path.join(process.resourcesPath, 'models', 'sensevoice-int8');
+            const recognizer = new OfflineRecognizer({ featConfig: { sampleRate: 16000, featureDim: 80 }, modelConfig: {
+              senseVoice: { model: path.join(modelDir, 'model.int8.onnx'), language: 'auto', useInverseTextNormalization: 1 },
+              tokens: path.join(modelDir, 'tokens.txt'), numThreads: 2, provider: 'cpu', debug: 0 } });
+            const parts = [];
+            const stream = recognizer.createStream(); stream.acceptWaveform({ samples, sampleRate });
+            recognizer.decode(stream); parts.push(String(recognizer.getResult(stream).text ?? '').replace(/<\|[^>]*\|>/g, '').trim());
+            const text = parts.filter(Boolean).join(' ');
+            const reference = 'MISTER QUILTER IS THE APOSTLE OF THE MIDDLE CLASSES AND WE ARE GLAD TO WELCOME HIS GOSPEL';
+            const norm = s => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim().split(/\s+/).filter(Boolean);
+            const a = norm(text), b = norm(reference), row = Array.from({length:b.length+1}, (_,i)=>i);
+            for(let i=1;i<=a.length;i++){let prev=row[0];row[0]=i;for(let j=1;j<=b.length;j++){const old=row[j];row[j]=Math.min(row[j]+1,row[j-1]+1,prev+(a[i-1]===b[j-1]?0:1));prev=old}}
+            const wer = row[b.length] / b.length;
+            console.log(JSON.stringify({platform:process.platform,arch:process.arch,electron:process.versions.electron,nodeAbi:process.versions.modules,sqlite:'loaded',koffi:typeof koffi.version === 'string' ? koffi.version : 'loaded',text,reference,wer},null,2));
+            if(wer>0.25) throw Error(`local SenseVoice WER ${wer.toFixed(3)} exceeds 0.25`);
+            recognizer.free?.();
+          })().catch(error => { console.error(error); process.exitCode=1 });
+          '@
+          Set-Content -Path $asrScript -Value $asrSource -Encoding utf8NoBOM
+          $output = Join-Path 'release/staging/0.2.2' "windows-$env:PACKAGE_ARCH"
+          $unpackedExe = Join-Path $output 'win-unpacked/OpenType.exe'
+          if (-not (Test-Path $unpackedExe)) { throw 'electron-builder did not produce the unpacked packaged Electron application.' }
+          $addon = Join-Path $output "win-unpacked/resources/app.asar.unpacked/node_modules/sherpa-onnx-win-$env:PACKAGE_ARCH/sherpa-onnx.node"
+          if (-not (Test-Path $addon)) { throw "Packaged ASR addon is missing: $addon" }
+          $installDir = [IO.Path]::GetFullPath((Join-Path 'tmp' 'release-${{ github.run_id }}/installed-${{ matrix.arch }}'))
+          $installer = Join-Path $output "OpenType-0.2.2-Windows-$env:PACKAGE_ARCH.exe"
+          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "NSIS installer exited with $($install.ExitCode)." }
+          $appExe = Join-Path $installDir 'OpenType.exe'
+          if (-not (Test-Path $appExe)) { throw 'The NSIS installer did not install the packaged app executable at the requested path.' }
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          & $appExe $asrScript $fixture $env:PACKAGE_ARCH
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify PE architectures, NSIS package, update feed, and checksums
+        shell: pwsh
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+          RELEASE_SHA: ${{ github.sha }}
+          SENSEVOICE_MODEL_DIR: tmp/release-${{ github.run_id }}/models/sensevoice-int8
+        run: |
+          $output = Join-Path 'release/staging/0.2.2' "windows-$env:PACKAGE_ARCH"
+          $installer = Get-ChildItem $output -Filter "OpenType-0.2.2-Windows-$env:PACKAGE_ARCH.exe" -File | Select-Object -First 1
+          if (-not $installer) { throw 'Architecture-specific NSIS installer was not produced.' }
+          if (-not (Test-Path (Join-Path $output 'latest.yml'))) { throw 'Stable latest.yml was not produced.' }
+          $peMachine = { param($path) $bytes = [IO.File]::ReadAllBytes($path); $offset = [BitConverter]::ToInt32($bytes, 0x3c); if ($bytes[$offset] -ne 0x50 -or $bytes[$offset + 1] -ne 0x45 -or $bytes[$offset + 2] -ne 0 -or $bytes[$offset + 3] -ne 0) { throw "Invalid PE file: $path" }; [BitConverter]::ToUInt16($bytes, $offset + 4) }
+          $expectedMachine = if ($env:PACKAGE_ARCH -eq 'arm64') { 0xAA64 } else { 0x8664 }
+          $nativeFiles = @(Get-ChildItem (Join-Path $output 'win-unpacked/resources/app.asar.unpacked') -File -Recurse | Where-Object {
+            if ($_.Extension -in @('.dll','.exe')) { return $true }
+            if ($_.Extension -ne '.node') { return $false }
+            if ($_.FullName -match '[\\/]koffi[\\/]build[\\/]koffi[\\/]') { return $_.FullName -match "[\\/]win32_$env:PACKAGE_ARCH[\\/]koffi\.node$" }
+            return $true
+          } | ForEach-Object FullName)
+          $nativeFiles += @((Join-Path $output 'win-unpacked/OpenType.exe'), (Join-Path $output 'win-unpacked/resources/lib/windows/build/OpenTypeNative.dll'), (Join-Path $output 'win-unpacked/resources/lib/windows/build/OutputAudio.exe'), (Join-Path $output 'win-unpacked/resources/lib/windows/build/ClipboardGuard.exe'))
+          foreach ($path in $nativeFiles) {
+            if (-not (Test-Path $path)) { throw "Packaged native binary is missing: $path" }
+            $machine = & $peMachine $path
+            if ($machine -ne $expectedMachine) { throw "PE machine mismatch in $path`: $machine" }
+            Write-Host "PE $path machine=0x$('{0:X4}' -f $machine)"
+          }
+          $feed = Get-Content (Join-Path $output 'latest.yml') -Raw
+          $entry = [regex]::Match($feed, "(?ms)^\s*-\s+url:\s*$([regex]::Escape($installer.Name))\s*\r?\n\s+sha512:\s*(\S+)\s*\r?\n\s+size:\s*(\d+)")
+          if (-not $entry.Success) { throw 'latest.yml has no complete matching installer entry.' }
+          if ([long]$entry.Groups[3].Value -ne $installer.Length) { throw 'latest.yml installer size does not match the produced installer.' }
+          $sha512 = [Security.Cryptography.SHA512]::Create()
+          $stream = [IO.File]::OpenRead($installer.FullName)
+          try { $actualSha512 = [Convert]::ToBase64String($sha512.ComputeHash($stream)) } finally { $stream.Dispose(); $sha512.Dispose() }
+          if ($entry.Groups[2].Value -ne $actualSha512) { throw 'latest.yml installer SHA-512 does not match the produced installer.' }
+          $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
+          $lines = @("$hash  $($installer.Name)")
+          Get-ChildItem $output -Filter '*.blockmap' -File | ForEach-Object { $lines += "$( (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant() )  $($_.Name)" }
+          $feedDigest = (Get-FileHash -Algorithm SHA256 (Join-Path $output 'latest.yml')).Hash.ToLowerInvariant()
+          $lines += "$feedDigest  latest.yml"
+          $provenance = [ordered]@{ sourceCommit=$env:RELEASE_SHA; version='0.2.2'; arch=$env:PACKAGE_ARCH; installerSha256=$hash; modelManifestSha256=(Get-FileHash -Algorithm SHA256 'src/main/services/local-asr/model-store.ts').Hash.ToLowerInvariant(); signing='unsigned' }
+          $provenance | ConvertTo-Json | Set-Content (Join-Path $output 'BUILD-PROVENANCE.json') -Encoding utf8
+          Set-Content (Join-Path $output "SHA256SUMS-Windows-$env:PACKAGE_ARCH.txt") -Value $lines -Encoding utf8NoBOM
+      - name: Retain Windows installer and verification records
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: OpenType-Windows-${{ matrix.arch }}-0.2.2-${{ github.sha }}
+          path: |
+            release/staging/0.2.2/windows-${{ matrix.arch }}/OpenType-0.2.2-Windows-${{ matrix.arch }}.exe
+            release/staging/0.2.2/windows-${{ matrix.arch }}/*.blockmap
+            release/staging/0.2.2/windows-${{ matrix.arch }}/latest.yml
+            release/staging/0.2.2/windows-${{ matrix.arch }}/SHA256SUMS-Windows-${{ matrix.arch }}.txt
+            release/staging/0.2.2/windows-${{ matrix.arch }}/BUILD-PROVENANCE.json
+          if-no-files-found: error
+          retention-days: 7

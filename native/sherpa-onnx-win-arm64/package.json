@@ -1,0 +1,17 @@
+{
+  "name": "sherpa-onnx-win-arm64",
+  "version": "1.13.8",
+  "private": true,
+  "description": "Locally built sherpa-onnx Node API addon and ARM64 runtime libraries",
+  "main": "sherpa-onnx.node",
+  "license": "Apache-2.0",
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "files": [
+    "sherpa-onnx.node",
+    "*.dll",
+    "LICENSE.sherpa-onnx",
+    "LICENSE.onnxruntime",
+    "BUILD-PROVENANCE.json"
+  ]
+}

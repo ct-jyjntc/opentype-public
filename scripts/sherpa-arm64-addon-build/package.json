@@ -1,0 +1,10 @@
+{
+  "name": "opentype-sherpa-arm64-addon-build",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned build tools for the Windows ARM64 sherpa-onnx Node-API addon",
+  "dependencies": {
+    "cmake-js": "7.3.1",
+    "node-addon-api": "8.3.0"
+  }
+}

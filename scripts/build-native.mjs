@@ -9,8 +9,9 @@ function run(command, args) {
 }
 if (process.platform === 'darwin') run('/bin/bash', [join(root, 'scripts/build-native.sh')])
 else if (process.platform === 'win32') {
-  if (process.arch !== 'x64') throw new Error('Windows 当前使用 x64 Electron/Node 与 SenseVoice 运行库；请在 x64 开发环境构建。')
-  const source = join(root, 'native/windows'), build = join(source, 'build/cmake')
-  run('cmake', ['-S', source, '-B', build, '-A', 'x64'])
+  const arch = process.env.OPENTYPE_NATIVE_ARCH ?? process.arch
+  if (!['x64', 'arm64'].includes(arch)) throw new Error(`Unsupported Windows native architecture: ${arch}`)
+  const source = join(root, 'native/windows'), build = join(source, 'build', arch)
+  run('cmake', ['-S', source, '-B', build, '-A', arch === 'arm64' ? 'ARM64' : 'x64'])
   run('cmake', ['--build', build, '--config', 'Release'])
-} else throw new Error('此平台的原生组件尚未实现；当前构建入口支持 macOS 和 Windows x64。')
+} else throw new Error('此平台的原生组件尚未实现；当前构建入口支持 macOS 和 Windows x64/ARM64。')

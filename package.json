@@ -1,13 +1,14 @@
 {
   "name": "opentype",
   "productName": "OpenType",
-  "version": "0.2.2-beta.6",
+  "version": "0.2.2",
   "license": "AGPL-3.0-only",
   "private": true,
   "description": "支持云端与本地 SenseVoice 的语音输入法：快捷键听写，将识别文字写入当前应用",
   "main": "dist/main/index.js",
   "scripts": {
     "native": "node scripts/build-native.mjs",
+    "release:merge-stable-feeds": "node scripts/merge-stable-release-feeds.mjs",
     "build:main": "tsup",
     "build:renderer": "vite build",
     "build": "npm run native && npm run build:main && npm run build:renderer",
@@ -81,6 +82,9 @@
     "ogg-opus-decoder": "1.7.5",
     "sherpa-onnx-node": "^1.13.8",
     "undici": "^7.16.0"
+  },
+  "optionalDependencies": {
+    "sherpa-onnx-win-arm64": "file:native/sherpa-onnx-win-arm64"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

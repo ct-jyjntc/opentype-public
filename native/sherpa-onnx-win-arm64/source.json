@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/k2-fsa/sherpa-onnx.git",
+  "tag": "v1.13.8",
+  "commit": "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf",
+  "onnxRuntimeVersion": "1.28.2",
+  "electronVersion": "33.4.11"
+}

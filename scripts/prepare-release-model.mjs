@@ -15,7 +15,9 @@ if (!revision || files.length !== 2 || new Set(files.map(file => file.name)).siz
   throw new Error('Could not read the pinned SenseVoice model manifest from model-store.ts')
 }
 
-const directory = join('gateway', 'models', 'sensevoice-int8')
+const directory = process.env.SENSEVOICE_MODEL_DIR
+  ? process.env.SENSEVOICE_MODEL_DIR
+  : join('gateway', 'models', 'sensevoice-int8')
 await mkdir(directory, { recursive: true })
 
 async function sha256(path) {
