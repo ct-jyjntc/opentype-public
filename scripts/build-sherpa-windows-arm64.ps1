@@ -37,6 +37,10 @@ Invoke-Checked 'cmake' $cmakeArgs
 $cmakeCachePath = Join-Path $buildDir 'CMakeCache.txt'
 $generatorInstance = (Select-String -Path $cmakeCachePath -Pattern '^CMAKE_GENERATOR_INSTANCE:INTERNAL=(.+)$').Matches.Groups[1].Value
 if (-not $generatorInstance) { throw 'CMake did not identify the selected Visual Studio installation.' }
+$msvcTools = Join-Path $generatorInstance 'VC/Tools/MSVC'
+$dumpbin = Get-ChildItem $msvcTools -Filter 'dumpbin.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $dumpbin) { throw "Could not find Microsoft's dumpbin import-table tool under $msvcTools" }
+$peMachine = { param($path) $bytes = [IO.File]::ReadAllBytes($path); $offset = [BitConverter]::ToInt32($bytes, 0x3c); if ($bytes[$offset] -ne 0x50 -or $bytes[$offset + 1] -ne 0x45 -or $bytes[$offset + 2] -ne 0 -or $bytes[$offset + 3] -ne 0) { throw "Invalid PE file: $path" }; [BitConverter]::ToUInt16($bytes, $offset + 4) }
 $redistRoots = @()
 if ($env:VCToolsRedistDir -and (Test-Path $env:VCToolsRedistDir)) { $redistRoots += $env:VCToolsRedistDir }
 $selectedRedistRoot = Join-Path $generatorInstance 'VC/Redist/MSVC'
@@ -48,26 +52,39 @@ $crtDirectories = foreach ($redistRoot in ($redistRoots | Select-Object -Unique)
 $crtCandidates = foreach ($directory in ($crtDirectories | Sort-Object FullName -Unique)) {
   $runtimeFiles = @(Get-ChildItem $directory.FullName -File | Where-Object { $_.Extension -in @('.dll', '.manifest') })
   $runtimeDlls = @($runtimeFiles | Where-Object Extension -EQ '.dll')
+  $nativeRuntimeDlls = @($runtimeDlls | Where-Object { (& $peMachine $_.FullName) -eq 0xAA64 })
+  $excludedRuntimeDlls = @($runtimeDlls | Where-Object { (& $peMachine $_.FullName) -ne 0xAA64 })
+  foreach ($runtimeDll in $excludedRuntimeDlls) {
+    $machine = & $peMachine $runtimeDll.FullName
+    $headers = & $dumpbin.FullName /HEADERS $runtimeDll.FullName 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "dumpbin could not inspect the non-native CRT PE header: $($runtimeDll.FullName)" }
+    $machineEvidence = @($headers | Select-String -Pattern '(?i)machine|ARM64X|ARM64EC' | ForEach-Object { $_.Line.Trim() }) -join '; '
+    $sha256 = (Get-FileHash -Algorithm SHA256 $runtimeDll.FullName).Hash.ToLowerInvariant()
+    Write-Host "Exclude non-native CRT payload source=$($runtimeDll.FullName) machine=0x$('{0:X4}' -f $machine) sha256=$sha256; $machineEvidence"
+  }
+  $nativeRuntimeFiles = @($nativeRuntimeDlls) + @($runtimeFiles | Where-Object Extension -EQ '.manifest')
   $requiredNames = @('MSVCP140.dll', 'MSVCP140_1.dll', 'VCRUNTIME140.dll')
-  if ($requiredNames | Where-Object { $_ -notin $runtimeDlls.Name }) { continue }
+  if ($requiredNames | Where-Object { $_ -notin $nativeRuntimeDlls.Name }) { continue }
   $versionText = $directory.Parent.Parent.Name
   try { $version = [version]$versionText } catch { continue }
-  [pscustomobject]@{ Directory=$directory; Files=$runtimeFiles; Version=$version; VersionText=$versionText }
+  [pscustomobject]@{ Directory=$directory; Files=$nativeRuntimeFiles; ExcludedFiles=$excludedRuntimeDlls; Version=$version; VersionText=$versionText }
 }
 $crtSelection = $crtCandidates | Sort-Object Version -Descending | Select-Object -First 1
 if (-not $crtSelection) { throw "The selected Visual Studio installation has no complete ARM64 retail CRT redistributable. Roots: $($redistRoots -join ', ')" }
 $crtDirectory = $crtSelection.Directory
 $crtRuntimeFiles = $crtSelection.Files
+$excludedRuntimeDlls = $crtSelection.ExcludedFiles
 $crtNames = @('MSVCP140.dll', 'MSVCP140_1.dll', 'VCRUNTIME140.dll')
-$peMachine = { param($path) $bytes = [IO.File]::ReadAllBytes($path); $offset = [BitConverter]::ToInt32($bytes, 0x3c); if ($bytes[$offset] -ne 0x50 -or $bytes[$offset + 1] -ne 0x45 -or $bytes[$offset + 2] -ne 0 -or $bytes[$offset + 3] -ne 0) { throw "Invalid PE file: $path" }; [BitConverter]::ToUInt16($bytes, $offset + 4) }
-foreach ($runtimeFile in $crtRuntimeFiles | Where-Object Extension -EQ '.dll') {
-  if ((& $peMachine $runtimeFile.FullName) -ne 0xAA64) { throw "The selected VC redistributable contains a non-ARM64 DLL: $($runtimeFile.FullName)" }
+$nativeRuntimeNames = @($crtRuntimeFiles | Where-Object Extension -EQ '.dll' | ForEach-Object Name)
+foreach ($manifest in $crtRuntimeFiles | Where-Object Extension -EQ '.manifest') {
+  $manifestText = Get-Content $manifest.FullName -Raw
+  $manifestDlls = [regex]::Matches($manifestText, '(?i)<file\b[^>]*\bname\s*=\s*["'']([^"'']+\.dll)["'']') | ForEach-Object { [IO.Path]::GetFileName($_.Groups[1].Value) }
+  $missingManifestDlls = @($manifestDlls | Where-Object { $_ -notin $nativeRuntimeNames })
+  if ($missingManifestDlls.Count) { throw "The selected native ARM64 CRT manifest references DLLs excluded from the ARM64 package: $($missingManifestDlls -join ', ') ($($manifest.FullName))" }
+  Write-Host "Selected ARM64 CRT manifest $($manifest.FullName) sha256=$((Get-FileHash -Algorithm SHA256 $manifest.FullName).Hash.ToLowerInvariant()); referenced DLLs=$($manifestDlls -join ', ')"
 }
 $optionalRedistLicense = Get-ChildItem (Split-Path (Split-Path $crtDirectory.FullName -Parent) -Parent) -Filter 'redist.txt' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-$msvcTools = Join-Path $generatorInstance 'VC/Tools/MSVC'
-$dumpbin = Get-ChildItem $msvcTools -Filter 'dumpbin.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $dumpbin) { throw "Could not find Microsoft's dumpbin import-table tool under $msvcTools" }
-Write-Host "Preflight selected VS=$generatorInstance; app-local ARM64 CRT=$($crtDirectory.FullName) version=$($crtSelection.VersionText); DLLs=$((@($crtRuntimeFiles | Where-Object Extension -EQ '.dll' | ForEach-Object Name)) -join ', '); required imports=$($crtNames -join ', ')"
+Write-Host "Preflight selected VS=$generatorInstance; native app-local ARM64 CRT=$($crtDirectory.FullName) version=$($crtSelection.VersionText); DLLs=$((@($crtRuntimeFiles | Where-Object Extension -EQ '.dll' | ForEach-Object Name)) -join ', '); required imports=$($crtNames -join ', ')"
 Invoke-Checked 'cmake' @('--build', $buildDir, '--config', 'Release', '--parallel')
 Invoke-Checked 'cmake' @('--install', $buildDir, '--config', 'Release')
 
@@ -123,27 +140,41 @@ foreach ($name in @('onnxruntime.dll', 'sherpa-onnx-c-api.dll')) {
   $dll = $dlls | Where-Object Name -EQ $name | Select-Object -First 1
   if (-not $dll) { throw "Missing required ARM64 runtime library: $name" }
 }
-foreach ($dll in ($dlls | Sort-Object FullName | Group-Object Name | ForEach-Object { $_.Group[0] })) {
+$packagedSherpaDlls = @($dlls | Sort-Object FullName | Group-Object Name | ForEach-Object { $_.Group[0] })
+foreach ($dll in $packagedSherpaDlls) {
   Copy-Item $dll.FullName (Join-Path $packageDir $dll.Name) -Force
 }
-$nativeClosureFiles = @($addon.FullName) + @($dlls | ForEach-Object FullName) + @($crtRuntimeFiles | Where-Object Extension -EQ '.dll' | ForEach-Object FullName)
-$runtimeImports = @()
-foreach ($nativeFile in $nativeClosureFiles) {
-  $imports = & $dumpbin.FullName /DEPENDENTS $nativeFile 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "dumpbin could not inspect native dependency imports: $nativeFile" }
-  $names = [regex]::Matches(($imports -join "`n"), '(?im)^\s+([A-Za-z0-9_.-]+\.dll)\s*$') | ForEach-Object { $_.Groups[1].Value }
-  $runtimeImports += @($names | Where-Object { $_ -match '^(MSVCP|VCRUNTIME|CONCRT)\d.*\.dll$' })
-}
-$runtimeImports = @($runtimeImports | Sort-Object -Unique)
-$availableRuntimeNames = @($crtRuntimeFiles | Where-Object Extension -EQ '.dll' | ForEach-Object Name)
-$missingRuntimeImports = @($runtimeImports | Where-Object { $_ -notin $availableRuntimeNames })
-if ($missingRuntimeImports.Count) { throw "The selected ARM64 CRT does not satisfy native imports: $($missingRuntimeImports -join ', ')" }
-Write-Host "Native import closure requires app-local VC runtime: $($runtimeImports -join ', ')"
 $runtimePackageDir = Join-Path $packageDir 'vc-runtime'
 New-Item -ItemType Directory -Path $runtimePackageDir -Force | Out-Null
 foreach ($runtimeFile in $crtRuntimeFiles) {
   Copy-Item $runtimeFile.FullName (Join-Path $runtimePackageDir $runtimeFile.Name) -Force
 }
+$nativeClosureFiles = @((Join-Path $packageDir 'sherpa-onnx.node')) + @($packagedSherpaDlls | ForEach-Object { Join-Path $packageDir $_.Name })
+$nativeFilesByName = @{}
+foreach ($nativeFile in $nativeClosureFiles) { $nativeFilesByName[[IO.Path]::GetFileName($nativeFile)] = $nativeFile }
+$runtimeFilesByName = @{}
+foreach ($runtimeFile in $crtRuntimeFiles | Where-Object Extension -EQ '.dll') { $runtimeFilesByName[$runtimeFile.Name] = Join-Path $runtimePackageDir $runtimeFile.Name }
+$queuedNativeFiles = [Collections.Generic.Queue[string]]::new()
+foreach ($nativeFile in $nativeClosureFiles) { $queuedNativeFiles.Enqueue($nativeFile) }
+$seenNativeFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$runtimeImports = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+while ($queuedNativeFiles.Count -gt 0) {
+  $nativeFile = $queuedNativeFiles.Dequeue()
+  if (-not $seenNativeFiles.Add($nativeFile)) { continue }
+  $imports = & $dumpbin.FullName /DEPENDENTS $nativeFile 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "dumpbin could not inspect native dependency imports: $nativeFile" }
+  $names = [regex]::Matches(($imports -join "`n"), '(?im)^\s+([A-Za-z0-9_.-]+\.dll)\s*$') | ForEach-Object { $_.Groups[1].Value }
+  foreach ($name in $names) {
+    if ($nativeFilesByName.ContainsKey($name)) { $queuedNativeFiles.Enqueue($nativeFilesByName[$name]); continue }
+    if ($runtimeFilesByName.ContainsKey($name)) { [void]$runtimeImports.Add($name); $queuedNativeFiles.Enqueue($runtimeFilesByName[$name]); continue }
+    if ($name -match '^(MSVCP|VCRUNTIME|CONCRT)\d.*\.dll$') {
+      throw "Native dependency closure imports unavailable non-ARM64 VC runtime DLL '$name' from $nativeFile."
+    }
+    if ($name -match '^(api|ext)-ms-win-' -or (Test-Path (Join-Path $env:windir "System32/$name"))) { continue }
+    throw "Native dependency closure imports a DLL absent from the package and Windows System32: '$name' from $nativeFile."
+  }
+}
+Write-Host "Verified native import closure; app-local VC runtime DLLs: $((@($runtimeImports) | Sort-Object) -join ', ')"
 $licenseNotice = @(
   'This is a provenance notice, not a license. Microsoft Visual C++ ARM64 runtime files are included unmodified from the selected Visual Studio retail redistributable.'
   "Selected Visual Studio installation: $generatorInstance"
@@ -161,12 +192,23 @@ $crtProvenance = @(
   'Source: selected Visual Studio ARM64 retail app-local redistributable installed on the native Windows ARM64 GitHub Actions runner.'
   "Source directory: $($crtDirectory.FullName)"
   "Redistributable version: $($crtSelection.VersionText)"
-  'Purpose: satisfy native Sherpa/ONNX dynamic CRT imports without relying on the runner-installed Visual C++ runtime.'
+  'Only PE machine 0xAA64 files are included for the native ARM64 application; non-ARM64 compatibility sidecars are excluded.'
+  "Resolved native VC imports: $((@($runtimeImports) | Sort-Object) -join ', ')"
+  'Purpose: satisfy the native Sherpa/ONNX dynamic CRT import closure without relying on the runner-installed Visual C++ runtime.'
   'Official source/license: https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution'
 )
 foreach ($runtimeFile in $crtRuntimeFiles | Where-Object Extension -EQ '.dll') {
   $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $runtimePackageDir $runtimeFile.Name)).Hash.ToLowerInvariant()
   $crtProvenance += "$($runtimeFile.Name) SHA-256: $hash"
+}
+foreach ($manifest in $crtRuntimeFiles | Where-Object Extension -EQ '.manifest') {
+  $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $runtimePackageDir $manifest.Name)).Hash.ToLowerInvariant()
+  $crtProvenance += "$($manifest.Name) SHA-256: $hash"
+}
+foreach ($runtimeDll in $excludedRuntimeDlls) {
+  $machine = & $peMachine $runtimeDll.FullName
+  $hash = (Get-FileHash -Algorithm SHA256 $runtimeDll.FullName).Hash.ToLowerInvariant()
+  $crtProvenance += "Excluded $($runtimeDll.Name) PE machine 0x$('{0:X4}' -f $machine) SHA-256: $hash"
 }
 Set-Content (Join-Path $packageDir 'VC-RUNTIME-PROVENANCE.txt') -Value $crtProvenance -Encoding utf8
 Write-Host "Staged app-local ARM64 VC runtime from $($crtDirectory.FullName) for app-root packaging."
