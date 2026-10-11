@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>OpenType · 开口说，不用打字</title>
-    <meta name="description" content="OpenType 是桌面语音输入法：说出来，帮你写成干净的文字，直接出现在光标处。支持 Apple 芯片 Mac，可本地识别，免费使用。" />
+    <meta name="description" content="OpenType 是桌面语音输入法：说出来，帮你写成干净的文字，直接出现在光标处。支持 Mac（Apple 芯片与 Intel）和 Windows（x64 与 ARM），可本地识别，免费使用。" />
     <link rel="icon" type="image/png" href="/assets/brand-mark.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -750,6 +750,10 @@ tr.is-highlight > :last-child { box-shadow: 12px 0 var(--fill-tertiary); }
       .x-dl__btns { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
       .x-dl__meta { color: var(--x-grey); font-size: 13px; text-align: center; min-height: 1.6em; }
       .x-dl__meta span { display: block; }
+      .x-dl__more { color: inherit; text-decoration: underline; text-underline-offset: 3px; display: inline-flex; align-items: center; min-height: 44px; }
+      .x-dl__more:hover { color: var(--x-ink); }
+      .x-cta .x-dl__more:hover { color: var(--x-ink-on); }
+      .x-faq details p a { color: inherit; text-underline-offset: 3px; }
 
       /* type */
       .x-h1 { font-size: clamp(48px, 9vw, 104px); line-height: 1.05; font-weight: 800; letter-spacing: -0.045em; margin: 0; }
@@ -874,7 +878,7 @@ tr.is-highlight > :last-child { box-shadow: 12px 0 var(--fill-tertiary); }
             <a href="#privacy">隐私</a>
             <a href="#faq">常见问题</a>
           </nav>
-          <button class="x-btn" type="button" data-dl-nav>下载</button>
+          <a class="x-btn" href="/downloads/">下载</a>
         </div>
       </header>
 
@@ -996,7 +1000,7 @@ tr.is-highlight > :last-child { box-shadow: 12px 0 var(--fill-tertiary); }
             <h2 class="x-h2">三步上手</h2>
           </div>
           <ol class="x-steps">
-            <li><span class="x-steps__n">1</span><h3 class="x-h3">下载安装</h3><p class="x-muted">macOS 13+（Apple 芯片）。Windows 安装包暂未提供。</p></li>
+            <li><span class="x-steps__n">1</span><h3 class="x-h3">下载安装</h3><p class="x-muted">macOS 13+（Apple 芯片或 Intel）或 Windows 10/11（x64 或 ARM）。</p></li>
             <li><span class="x-steps__n">2</span><h3 class="x-h3">打开权限</h3><p class="x-muted">允许麦克风和辅助功能权限。</p></li>
             <li><span class="x-steps__n">3</span><h3 class="x-h3">开始说话</h3><p class="x-muted">选识别方式（云端或本地），在任意输入框按 <kbd>Fn</kbd> 开始说话。</p></li>
           </ol>
@@ -1010,8 +1014,9 @@ tr.is-highlight > :last-child { box-shadow: 12px 0 var(--fill-tertiary); }
             <details><summary>收费吗？</summary><p>OpenType 本身免费。云端识别（SiliconFlow）和文字整理（DeepSeek）按服务商的标准计费，用你自己的 Key；只用本地识别则完全免费。</p></details>
             <details><summary>支持哪些语言？</summary><p>普通话、粤语、英语、日语、韩语，可以混着说。</p></details>
             <details><summary>能离线用吗？</summary><p>可以。选本地识别并关掉文字整理就行。</p></details>
-            <details><summary>支持哪些系统？</summary><p>目前提供 macOS 13 及以上（Apple 芯片）安装包。Windows 安装包暂未提供。</p></details>
-            <details><summary>macOS 提示「无法验证开发者」怎么办？</summary><p>当前提供正式版，适用于 macOS 13+ 的 Apple 芯片 Mac，尚未通过 Apple 公证。首次打开可能出现开发者验证提示；确认下载来源后，请在「系统设置 → 隐私与安全性」中按系统提示处理。</p></details>
+            <details><summary>支持哪些系统？</summary><p>macOS 13 及以上（Apple 芯片和 Intel 芯片），以及 Windows 10/11（x64 和 ARM）。官网会自动推荐适合你设备的版本，也可以在<a href="/downloads/">下载页</a>自己选择。</p></details>
+            <details><summary>macOS 提示「无法验证开发者」怎么办？</summary><p>当前正式版尚未通过 Apple 公证。首次打开可能出现开发者验证提示；确认下载来源后，请在「系统设置 → 隐私与安全性」中按系统提示处理。</p></details>
+            <details><summary>Windows 提示「Windows 已保护你的电脑」怎么办？</summary><p>当前 Windows 安装包尚未进行代码签名，SmartScreen 可能拦截首次运行。确认下载来源后，点「更多信息」，再点「仍要运行」。</p></details>
           </div>
         </section>
 
@@ -1030,6 +1035,7 @@ tr.is-highlight > :last-child { box-shadow: 12px 0 var(--fill-tertiary); }
         </div>
       </footer>
     </div>
+    <script src="/assets/downloads.js"></script>
     <script>
 /* Page behaviors for Hark's component library: the nav, the theme toggle, tables, line charts and images. style-gates: data */
 (function () {
@@ -1243,69 +1249,39 @@ tr.is-highlight > :last-child { box-shadow: 12px 0 var(--fill-tertiary); }
           })();
         }
 
-        /* downloads */
-        var ua = navigator.userAgent || "", plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
-        var mobile = /iPhone|iPad|iPod|Android/i.test(ua) || (/Mac/i.test(plat) && navigator.maxTouchPoints > 1);
-        var os = mobile ? null : /Mac/i.test(plat + ua) ? "mac" : /Win/i.test(plat + ua) ? "win" : null;
-        var OS = {
-          mac: { name: "macOS（Apple 芯片）", req: "macOS 13+ · Apple 芯片" },
-          win: { name: "Windows", req: "Windows 10/11" },
-        };
+        /* downloads: the hero and closing buttons offer the build for this device (assets/downloads.js); every build is on /downloads/ */
+        var DL = window.OpenTypeDownloads;
         var groups = [].slice.call(document.querySelectorAll("[data-dl]"));
-        var navBtn = document.querySelector("[data-dl-nav]");
-        var shown = os ? [os] : ["mac", "win"];
-
-        function trigger(btn, url, label) {
-          var a = document.createElement("a");
-          a.href = url; a.setAttribute("download", ""); a.style.display = "none";
-          document.body.appendChild(a); a.click(); a.remove();
-          btn.textContent = "正在下载…";
-          setTimeout(function () { btn.textContent = label; }, 2000);
-        }
-        function makeBtn(lg) {
-          var b = document.createElement("button");
-          b.type = "button"; b.className = "x-btn" + (lg ? " x-btn--lg" : "");
-          return b;
-        }
-        function render(files, version) {
+        function render(key, release) {
           groups.forEach(function (g) {
             var lg = g.getAttribute("data-size") === "lg";
             g.innerHTML = '<div class="x-dl__btns"></div><p class="x-dl__meta"></p>';
             var box = g.firstChild, meta = g.lastChild;
-            shown.forEach(function (k) {
-              var b = makeBtn(lg), f = files && files[k];
-              if (files === undefined) { b.textContent = "下载 " + OS[k].name + " 版"; b.disabled = true; }
-              else if (f) {
-                var label = "下载 " + OS[k].name + " 版";
-                b.textContent = label;
-                b.addEventListener("click", function () { trigger(b, f.url, label); });
-                var s = document.createElement("span");
-                s.textContent = version + " · " + Math.round(f.size / 1048576) + " MB · " + OS[k].req;
-                meta.appendChild(s);
-              } else { b.textContent = k === "win" ? "Windows 安装包暂未提供" : "下载暂不可用"; b.disabled = true; }
-              box.appendChild(b);
-            });
+            var p = key && DL.PACKAGES[key], f = p && release && release.files[key], b;
+            if (f) {
+              var label = "下载 " + (p.os === "mac" ? "macOS" : "Windows") + " 版 · " + p.short;
+              b = document.createElement("button"); b.type = "button"; b.textContent = label;
+              b.addEventListener("click", function () { DL.start(b, f.url, label); });
+              var s = document.createElement("span");
+              s.textContent = release.version + " · " + DL.sizeMB(f.size) + " · " + p.req;
+              meta.appendChild(s);
+            } else if (release === undefined) {
+              b = document.createElement("button"); b.type = "button"; b.textContent = "下载 OpenType"; b.disabled = true;
+            } else {
+              b = document.createElement("a"); b.href = "/downloads/"; b.textContent = "查看全部下载";
+            }
+            b.className = "x-btn" + (lg ? " x-btn--lg" : "");
+            box.appendChild(b);
+            if (release !== undefined) {
+              var more = document.createElement("a");
+              more.className = "x-dl__more"; more.href = "/downloads/";
+              more.textContent = f ? "其他系统或芯片？查看全部版本" : "支持 macOS（Apple 芯片 / Intel）与 Windows（x64 / ARM）";
+              meta.appendChild(more);
+            }
           });
-          if (!navBtn) return;
-          if (files === undefined) { navBtn.disabled = true; return; }
-          var nf = os && files && files[os];
-          var fresh = navBtn.cloneNode(false); fresh.disabled = false; navBtn.replaceWith(fresh); navBtn = fresh;
-          if (!files || (os && !nf)) { navBtn.textContent = os === "win" ? "Windows 暂未提供" : "下载暂不可用"; navBtn.disabled = true; }
-          else if (nf) { navBtn.textContent = "下载"; navBtn.addEventListener("click", function () { trigger(navBtn, nf.url, "下载"); }); }
-          else { navBtn.textContent = "下载"; navBtn.addEventListener("click", function () { document.getElementById("download").scrollIntoView({ behavior: reduce ? "auto" : "smooth" }); }); }
         }
-        render(undefined);
-        fetch("/downloads/manifest.json", { cache: "no-store" })
-          .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-          .then(function (release) {
-            var files = {}, known = { mac: "/downloads/macos-arm64", win: "/downloads/windows-x64" };
-            ["mac", "win"].forEach(function (k) {
-              var f = release.files && release.files[k];
-              if (f && f.url === known[k] && Number.isSafeInteger(f.size) && f.size > 0) files[k] = f;
-            });
-            render(files, release.version || "");
-          })
-          .catch(function () { render(null); });
+        render(undefined, undefined);
+        Promise.all([DL.detect(), DL.loadManifest()]).then(function (r) { render(r[0], r[1]); });
       })();
     </script>
   </body>

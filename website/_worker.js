@@ -1,14 +1,18 @@
 const MODEL_REVISION = '2365baeacb507f821a0c8120fcee3d484dba7a07';
 const MODEL_PREFIX = `/downloads/models/sensevoice-int8/${MODEL_REVISION}/`;
-const DOWNLOADS = { '/downloads/macos-arm64': { key: 'mac', suffix: 'macOS-arm64.dmg' },
-  '/downloads/windows-x64': { key: 'win', suffix: 'Windows-x64.exe' } };
+const DOWNLOADS = {
+  '/downloads/macos-arm64': { key: 'mac', suffix: 'macOS-arm64.dmg' },
+  '/downloads/macos-x64': { key: 'mac-x64', suffix: 'macOS-x64.dmg' },
+  '/downloads/windows-x64': { key: 'win', suffix: 'Windows-x64.exe' },
+  '/downloads/windows-arm64': { key: 'win-arm64', suffix: 'Windows-arm64.exe' },
+};
 const UPSTREAM_HOSTS = new Set(['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'api.opentype.top']);
 const REPOSITORY = 'ct-jyjntc/opentype-public';
 // GitHub's "latest" release is the newest stable one: drafts and prereleases are excluded.
 const LATEST_RELEASE_API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 // Edge-cached so the unauthenticated GitHub API limit is never reached; a new release shows up within this time.
 const LATEST_CACHE_SECONDS = 300;
-const LATEST_CACHE_KEY = 'https://www.opentype.top/__cache/latest-stable-release';
+const LATEST_CACHE_KEY = 'https://www.opentype.top/__cache/latest-stable-release-v2';
 
 function fail(status, message) {
   return new Response(message, { status, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });

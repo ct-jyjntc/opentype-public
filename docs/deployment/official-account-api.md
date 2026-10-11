@@ -98,7 +98,7 @@ beta.25 没有新增数据库结构迁移，保留现有 JWT、数据库与会�
 
 ## 官网下载
 
-自 0.2.0 起，官网 Worker（`website/_worker.js`）从 GitHub `releases/latest` 读取最新**正式版**（排除草稿与预发布），生成 `/downloads/manifest.json` 并转发 `/downloads/macos-arm64` 对应版本的 DMG；结果在边缘缓存 5 分钟，GitHub 不可用时退回站内静态 `downloads/manifest.json`（缓存 60 秒）。发布新正式版后无需修改官网，最多 5 分钟后生效；静态 manifest 仅作兜底。官网通过 `npx wrangler@4.146.0 pages deploy website --project-name opentype-website --branch main` 部署。
+自 0.2.0 起，官网 Worker（`website/_worker.js`）从 GitHub `releases/latest` 读取最新**正式版**（排除草稿与预发布），生成 `/downloads/manifest.json`，并转发 `/downloads/macos-arm64`、`/downloads/macos-x64`、`/downloads/windows-x64`、`/downloads/windows-arm64` 对应版本的安装包（自 0.2.2 起）。首页主按钮按设备自动识别系统与芯片，只给出一个推荐安装包；导航栏“下载”进入 `/downloads/`，列出全部架构供用户自选。两处共用 `website/assets/downloads.js`；结果在边缘缓存 5 分钟，GitHub 不可用时退回站内静态 `downloads/manifest.json`（缓存 60 秒）。发布新正式版后无需修改官网，最多 5 分钟后生效；静态 manifest 仅作兜底。官网通过 `npx wrangler@4.146.0 pages deploy website --project-name opentype-website --branch main` 部署。
 
 ## beta.26 发布衔接
 
