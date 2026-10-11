@@ -157,7 +157,6 @@ export function HistoryPage({ notify }: { notify: (text: string) => void }) {
                 <span>{durationLabel(row.duration)}</span>
                 {typeof parseMeta(row.modeMeta).skill_name === 'string' && <span>{parseMeta(row.modeMeta).skill_name}</span>}
                 {parseMeta(row.modeMeta).input_delivery === 'failed' && <span className="warning">文字已生成 · 待复制</span>}
-                {parseMeta(row.modeMeta).input_delivery === 'unverified' && <span className="warning">已尝试发送 · 请核对输入框</span>}
                 {row.status !== 'completed' && (
                   <span className="warning">
                     {parseMeta(row.modeMeta).recovered_audio

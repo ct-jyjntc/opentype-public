@@ -266,7 +266,7 @@ export function Menu({ label, items }: { label: string; items: MenuItem[] }) {
       {open && (
         <div className="menu-list" role="menu">
           {items.map(item => (
-            <button type="button" role="menuitem" key={item.label} aria-label={item.aria} className={item.danger ? 'danger-text' : ''} disabled={item.disabled}
+            <button type="button" role="menuitem" key={item.label} aria-label={item.aria} className={`menu-item${item.danger ? ' danger-text' : ''}`} disabled={item.disabled}
               onClick={() => { setOpen(false); item.onSelect() }}>{item.label}</button>
           ))}
         </div>
