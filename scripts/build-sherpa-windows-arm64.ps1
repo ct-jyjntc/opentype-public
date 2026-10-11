@@ -15,6 +15,42 @@ function Invoke-Checked([string]$Command, [string[]]$Arguments) {
   if ($LASTEXITCODE -ne 0) { throw "$Command failed with exit code $LASTEXITCODE" }
 }
 
+$peMachine = { param($path) $bytes = [IO.File]::ReadAllBytes($path); $offset = [BitConverter]::ToInt32($bytes, 0x3c); if ($bytes[$offset] -ne 0x50 -or $bytes[$offset + 1] -ne 0x45 -or $bytes[$offset + 2] -ne 0 -or $bytes[$offset + 3] -ne 0) { throw "Invalid PE file: $path" }; [BitConverter]::ToUInt16($bytes, $offset + 4) }
+$electronExe = Join-Path $root 'node_modules/electron/dist/electron.exe'
+if (-not (Test-Path $electronExe)) { throw "The locked Electron executable is missing: $electronExe" }
+$electronMachine = & $peMachine $electronExe
+if ($electronMachine -ne 0xAA64) { throw "The Electron runtime PE is not native ARM64: machine=0x$('{0:X4}' -f $electronMachine)" }
+$electronProbePath = Join-Path $taskRoot 'probe-electron-runtime.cjs'
+$electronProbeResultPath = Join-Path $taskRoot 'electron-runtime.json'
+$electronProbeStdoutPath = Join-Path $taskRoot 'electron-runtime.stdout.txt'
+$electronProbeStderrPath = Join-Path $taskRoot 'electron-runtime.stderr.txt'
+if (Test-Path $electronProbeResultPath) { throw "Refusing to trust a pre-existing Electron probe result: $electronProbeResultPath" }
+$electronProbeResultLiteral = ConvertTo-Json -InputObject $electronProbeResultPath -Compress
+$electronProbeSource = "require('node:fs').writeFileSync($electronProbeResultLiteral, JSON.stringify({arch:process.arch,electron:process.versions.electron,nodeAbi:process.versions.modules}), 'utf8');"
+Set-Content -Path $electronProbePath -Value $electronProbeSource -Encoding utf8NoBOM
+$env:ELECTRON_RUN_AS_NODE = '1'
+$electronProbe = Start-Process -FilePath $electronExe -ArgumentList @('"' + $electronProbePath + '"') -WorkingDirectory $root -PassThru -NoNewWindow -RedirectStandardOutput $electronProbeStdoutPath -RedirectStandardError $electronProbeStderrPath
+if (-not $electronProbe.WaitForExit(120000)) {
+  $probePid = $electronProbe.Id
+  try { $electronProbe.Kill(); $electronProbe.WaitForExit() } catch { }
+  throw "Electron ARM64 runtime probe timed out after 120 seconds; terminated probe PID $probePid."
+}
+$electronProbe.Refresh()
+$electronProbeStdout = if (Test-Path $electronProbeStdoutPath) { Get-Content $electronProbeStdoutPath -Raw } else { '' }
+$electronProbeStderr = if (Test-Path $electronProbeStderrPath) { Get-Content $electronProbeStderrPath -Raw } else { '' }
+$electronProbeResult = if (Test-Path $electronProbeResultPath) { Get-Content $electronProbeResultPath -Raw } else { '' }
+Write-Host "Electron runtime probe process exit=$($electronProbe.ExitCode); PE machine=0x$('{0:X4}' -f $electronMachine); stdout=$electronProbeStdout; stderr=$electronProbeStderr; result=$electronProbeResult"
+if ($electronProbe.ExitCode -ne 0 -or -not $electronProbeResult) { throw 'The Electron ARM64 runtime probe did not exit successfully with a JSON result.' }
+try { $electronRuntime = $electronProbeResult | ConvertFrom-Json } catch { throw "The Electron ARM64 runtime probe did not produce valid JSON: $electronProbeResult" }
+$expectedAbiOutput = & node -p "require('node-abi').getAbi('$($pin.electronVersion)', 'electron')" 2>&1
+$expectedAbiExitCode = $LASTEXITCODE
+$expectedAbi = ($expectedAbiOutput | Out-String).Trim()
+if ($expectedAbiExitCode -ne 0 -or -not $expectedAbi) { throw "Could not map the pinned Electron version to its Node ABI using locked node-abi; exit=$expectedAbiExitCode output=$expectedAbi" }
+if ($electronRuntime.arch -ne 'arm64' -or $electronRuntime.electron -ne $pin.electronVersion -or $electronRuntime.nodeAbi -ne $expectedAbi) {
+  throw "Electron runtime does not match the native addon target: actual=$electronProbeResult; expectedArch=arm64 expectedElectron=$($pin.electronVersion) expectedAbi=$expectedAbi."
+}
+Write-Host "Verified native Electron runtime: arch=$($electronRuntime.arch) electron=$($electronRuntime.electron) nodeAbi=$($electronRuntime.nodeAbi), node-abi mapping=$expectedAbi"
+
 $sourceDir = Join-Path $taskRoot 'sherpa-onnx'
 $buildDir = Join-Path $taskRoot 'build'
 $installDir = Join-Path $taskRoot 'install'
@@ -40,7 +76,6 @@ if (-not $generatorInstance) { throw 'CMake did not identify the selected Visual
 $msvcTools = Join-Path $generatorInstance 'VC/Tools/MSVC'
 $dumpbin = Get-ChildItem $msvcTools -Filter 'dumpbin.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $dumpbin) { throw "Could not find Microsoft's dumpbin import-table tool under $msvcTools" }
-$peMachine = { param($path) $bytes = [IO.File]::ReadAllBytes($path); $offset = [BitConverter]::ToInt32($bytes, 0x3c); if ($bytes[$offset] -ne 0x50 -or $bytes[$offset + 1] -ne 0x45 -or $bytes[$offset + 2] -ne 0 -or $bytes[$offset + 3] -ne 0) { throw "Invalid PE file: $path" }; [BitConverter]::ToUInt16($bytes, $offset + 4) }
 $redistRoots = @()
 if ($env:VCToolsRedistDir -and (Test-Path $env:VCToolsRedistDir)) { $redistRoots += $env:VCToolsRedistDir }
 $selectedRedistRoot = Join-Path $generatorInstance 'VC/Redist/MSVC'
@@ -217,18 +252,14 @@ $ortLicense = Get-ChildItem $buildDir -Filter '*LICENSE*' -File -Recurse | Selec
 $ortLicense = Get-ChildItem (Join-Path $buildDir '_deps') -Filter '*LICENSE*' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $ortLicense) { throw 'Could not find the ONNX Runtime license shipped by the pinned upstream source build.' }
 Copy-Item $ortLicense.FullName (Join-Path $packageDir 'LICENSE.onnxruntime') -Force
-$env:ELECTRON_RUN_AS_NODE = '1'
-$electronExe = Join-Path $root 'node_modules/electron/dist/electron.exe'
-$electronAbi = (& $electronExe -p 'process.versions.modules').Trim()
-if ($LASTEXITCODE -ne 0 -or -not $electronAbi) { throw 'Could not inspect the Electron runtime ABI.' }
 @{
   repository = $pin.repository
   tag = $pin.tag
   commit = $actualCommit
   onnxRuntimeVersion = $pin.onnxRuntimeVersion
   onnxRuntimeMdReleaseSha256 = $ortHash
-  electronVersion = $pin.electronVersion
-  electronAbi = $electronAbi
-  targetArch = 'arm64'
+  electronVersion = $electronRuntime.electron
+  electronAbi = $electronRuntime.nodeAbi
+  targetArch = $electronRuntime.arch
 } | ConvertTo-Json | Set-Content (Join-Path $packageDir 'BUILD-PROVENANCE.json') -Encoding utf8
-Write-Host "Installed sherpa ARM64 addon and required DLLs in $packageDir"
+Write-Host "Installed sherpa ARM64 addon and required DLLs in $packageDir using verified Electron $($electronRuntime.electron) / ABI $($electronRuntime.nodeAbi)."
