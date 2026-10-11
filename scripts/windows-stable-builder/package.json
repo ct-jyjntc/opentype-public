@@ -1,0 +1,9 @@
+{
+  "name": "opentype-windows-release-tooling",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned Windows-only packaging tools for OpenType stable releases",
+  "dependencies": {
+    "electron-builder": "26.9.0"
+  }
+}

@@ -84,9 +84,83 @@ jobs:
           path: tmp/release-${{ github.run_id }}/models/sensevoice-int8
       - name: Install locked app dependencies
         run: npm ci
+      - name: Install pinned Windows-only electron-builder tooling
+        shell: pwsh
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          $taskDir = Join-Path 'tmp' 'release-${{ github.run_id }}'
+          $toolingDir = Join-Path $taskDir 'windows-builder-26.9.0'
+          New-Item -ItemType Directory -Path $toolingDir -Force | Out-Null
+          Copy-Item 'scripts/windows-stable-builder/package.json' $toolingDir
+          Copy-Item 'scripts/windows-stable-builder/package-lock.json' $toolingDir
+          npm ci --prefix $toolingDir --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $builderPackage = Join-Path $toolingDir 'node_modules/electron-builder/package.json'
+          $appBuilderPackage = Join-Path $toolingDir 'node_modules/app-builder-lib/package.json'
+          $builderVersion = (Get-Content $builderPackage -Raw | ConvertFrom-Json).version
+          $appBuilderVersion = (Get-Content $appBuilderPackage -Raw | ConvertFrom-Json).version
+          if ($builderVersion -ne '26.9.0' -or $appBuilderVersion -ne '26.9.0') { throw "Unexpected Windows packaging tool versions: electron-builder=$builderVersion app-builder-lib=$appBuilderVersion" }
+          Write-Host "Pinned Windows-only NSIS toolchain: electron-builder=$builderVersion app-builder-lib=$appBuilderVersion arch=$env:PACKAGE_ARCH"
       - name: Build sherpa-onnx for Windows ARM64 and Electron 33
+        id: build_sherpa_arm64
         if: ${{ matrix.arch == 'arm64' }}
         run: ./scripts/build-sherpa-windows-arm64.ps1
+      - name: Record exact ARM64 native bundle inputs and output hashes
+        if: ${{ always() && matrix.arch == 'arm64' && steps.build_sherpa_arm64.outcome == 'success' }}
+        shell: pwsh
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          $root = (Resolve-Path '.').Path
+          $taskDir = Join-Path $root 'tmp/release-${{ github.run_id }}'
+          $buildDir = Join-Path $root 'tmp/${{ github.run_id }}-windows-arm64-sherpa'
+          $packageDir = Join-Path $root 'node_modules/sherpa-onnx-win-arm64'
+          $pinPath = Join-Path $root 'native/sherpa-onnx-win-arm64/source.json'
+          $pin = Get-Content $pinPath -Raw | ConvertFrom-Json
+          $runtime = Get-Content (Join-Path $buildDir 'electron-runtime.json') -Raw | ConvertFrom-Json
+          $ortCmake = Get-Content (Join-Path $buildDir 'sherpa-onnx/cmake/onnxruntime-win-arm64.cmake') -Raw
+          $ortHash = [regex]::Match($ortCmake, 'set\(ONNXRUNTIME_HASH_MD_Release "SHA256=([a-f0-9]{64})"\)').Groups[1].Value
+          if (-not $ortHash) { throw 'Could not resolve the pinned ONNX Runtime input hash for the ARM64 native bundle manifest.' }
+          $packageEntries = @(Get-ChildItem $packageDir -Force -Recurse)
+          if ($packageEntries | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }) { throw 'Refusing to hash or retain a native package containing reparse-point paths.' }
+          $nativeFiles = @(Get-ChildItem $packageDir -File -Recurse | Sort-Object FullName | ForEach-Object {
+            [ordered]@{ path=$_.FullName.Substring($packageDir.Length + 1).Replace('\','/'); size=$_.Length; sha256=(Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant() }
+          })
+          if (-not $nativeFiles.Count) { throw 'The verified ARM64 native package is empty.' }
+          $manifest = [ordered]@{
+            kind='diagnostic-reusable-native-bundle'; sourceCommit=$env:RELEASE_SHA; targetArch='arm64'
+            upstreamRepository=$pin.repository; upstreamTag=$pin.tag; upstreamCommit=$pin.commit
+            upstreamSourceJsonSha256=(Get-FileHash -Algorithm SHA256 $pinPath).Hash.ToLowerInvariant()
+            onnxRuntimeVersion=$pin.onnxRuntimeVersion; onnxRuntimeMdReleaseSha256=$ortHash
+            electronRuntime=$runtime
+            rootPackageLockSha256=(Get-FileHash -Algorithm SHA256 (Join-Path $root 'package-lock.json')).Hash.ToLowerInvariant()
+            nativeBuildScriptSha256=(Get-FileHash -Algorithm SHA256 (Join-Path $root 'scripts/build-sherpa-windows-arm64.ps1')).Hash.ToLowerInvariant()
+            adapterPackageJsonSha256=(Get-FileHash -Algorithm SHA256 (Join-Path $root 'scripts/sherpa-arm64-addon-build/package.json')).Hash.ToLowerInvariant()
+            adapterPackageLockSha256=(Get-FileHash -Algorithm SHA256 (Join-Path $root 'scripts/sherpa-arm64-addon-build/package-lock.json')).Hash.ToLowerInvariant()
+            files=$nativeFiles
+          }
+          $manifestPath = Join-Path $taskDir 'windows-arm64-native-bundle-provenance.json'
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content $manifestPath -Encoding utf8
+          Write-Host "Recorded native bundle source=$($env:RELEASE_SHA) upstream=$($pin.commit) Electron=$($runtime.electron)/$($runtime.nodeAbi) files=$($nativeFiles.Count) provenance=$manifestPath"
+      - name: Retain task-only ARM64 native bundle and provenance
+        if: ${{ always() && matrix.arch == 'arm64' && steps.build_sherpa_arm64.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: OpenType-Windows-arm64-native-diagnostic-${{ github.sha }}
+          path: |
+            node_modules/sherpa-onnx-win-arm64/sherpa-onnx.node
+            node_modules/sherpa-onnx-win-arm64/*.dll
+            node_modules/sherpa-onnx-win-arm64/*.txt
+            node_modules/sherpa-onnx-win-arm64/package.json
+            node_modules/sherpa-onnx-win-arm64/source.json
+            node_modules/sherpa-onnx-win-arm64/BUILD-PROVENANCE.json
+            node_modules/sherpa-onnx-win-arm64/LICENSE*
+            node_modules/sherpa-onnx-win-arm64/vc-runtime/*
+            tmp/${{ github.run_id }}-windows-arm64-sherpa/electron-runtime.json
+            tmp/release-${{ github.run_id }}/windows-arm64-native-bundle-provenance.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Build native helpers and production app
         shell: pwsh
         env:
@@ -96,9 +170,13 @@ jobs:
         run: |
           npm run build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npx electron-builder --config electron-builder.windows.stable.cjs --win nsis --${{ matrix.arch }} --publish never
+          $builderCli = Join-Path 'tmp' 'release-${{ github.run_id }}/windows-builder-26.9.0/node_modules/electron-builder/cli.js'
+          node $builderCli --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node $builderCli --config electron-builder.windows.stable.cjs --win nsis --${{ matrix.arch }} --publish never
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run packaged Electron 33 and local SenseVoice on a public speech oracle
+        id: verify_packaged_asr
         shell: pwsh
         env:
           PACKAGE_ARCH: ${{ matrix.arch }}
@@ -159,8 +237,42 @@ jobs:
           if (-not (Test-Path $addon)) { throw "Packaged ASR addon is missing: $addon" }
           $installDir = [IO.Path]::GetFullPath((Join-Path 'tmp' 'release-${{ github.run_id }}/installed-${{ matrix.arch }}'))
           $installer = Join-Path $output "OpenType-0.2.2-Windows-$env:PACKAGE_ARCH.exe"
-          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw "NSIS installer exited with $($install.ExitCode)." }
+          $installerStarted = Get-Date
+          $installerStartError = $null
+          $install = $null
+          try { $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru -ErrorAction Stop }
+          catch { $installerStartError = $_.Exception.ToString() }
+          $installerExitCode = if ($null -ne $install) { $install.ExitCode } else { $null }
+          $installerDiagnosticDir = Join-Path $taskDir 'installer-diagnostics-arm64'
+          New-Item -ItemType Directory -Path $installerDiagnosticDir -Force | Out-Null
+          $installerDiagnostic = [ordered]@{
+            architecture=$env:PACKAGE_ARCH; startedAt=$installerStarted.ToUniversalTime().ToString('o'); finishedAt=(Get-Date).ToUniversalTime().ToString('o')
+            installerName=[IO.Path]::GetFileName($installer); installerSize=(Get-Item $installer).Length
+            installerSha256=(Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+            processId=$(if ($install) { $install.Id } else { $null }); exitCode=$installerExitCode
+            startError=$(if ($installerStartError) { $installerStartError -replace '(?i)C:\\Users\\[^\\]+', '%USERPROFILE%' } else { $null })
+          }
+          if ($installerExitCode -ne 0) {
+            Start-Sleep -Seconds 2
+            $events = @(Get-WinEvent -FilterHashtable @{ LogName='Application'; StartTime=$installerStarted.AddSeconds(-1); Id=@(1000,1001) } -ErrorAction SilentlyContinue | ForEach-Object {
+              $message = $_.Message
+              $fields = [ordered]@{ faultingApplication=$null; faultingModule=$null; exceptionCode=$null; faultOffset=$null; processId=$null; reportId=$null }
+              foreach ($line in ($message -split "`r?`n")) {
+                if ($line -match '^\s*Faulting application name:\s*(.+)$') { $fields.faultingApplication=[IO.Path]::GetFileName($Matches[1].Trim()) }
+                elseif ($line -match '^\s*Faulting module name:\s*(.+)$') { $fields.faultingModule=[IO.Path]::GetFileName($Matches[1].Trim()) }
+                elseif ($line -match '^\s*Exception code:\s*(.+)$') { $fields.exceptionCode=$Matches[1].Trim() }
+                elseif ($line -match '^\s*Fault offset:\s*(.+)$') { $fields.faultOffset=$Matches[1].Trim() }
+                elseif ($line -match '^\s*Faulting process id:\s*(.+)$') { $fields.processId=$Matches[1].Trim() }
+                elseif ($line -match '^\s*Report Id:\s*(.+)$') { $fields.reportId=$Matches[1].Trim() }
+              }
+              [ordered]@{ time=$_.TimeCreated.ToUniversalTime().ToString('o'); eventId=$_.Id; provider=$_.ProviderName; fields=$fields }
+            })
+            $installerDiagnostic.events=$events
+          }
+          $diagnosticPath = Join-Path $installerDiagnosticDir 'installer-run.json'
+          $installerDiagnostic | ConvertTo-Json -Depth 8 | Set-Content $diagnosticPath -Encoding utf8
+          Write-Host "NSIS install exit=$installerExitCode startError=$($installerDiagnostic.startError) diagnostics=$diagnosticPath"
+          if ($installerExitCode -ne 0) { throw "NSIS installer exited with $installerExitCode; sanitized Application Error events saved to $diagnosticPath." }
           $appExe = Join-Path $installDir 'OpenType.exe'
           if (-not (Test-Path $appExe)) { throw 'The NSIS installer did not install the packaged app executable at the requested path.' }
           $env:ELECTRON_RUN_AS_NODE = '1'
@@ -184,6 +296,59 @@ jobs:
           if ($asrResult.platform -ne 'win32' -or $asrResult.arch -ne $env:PACKAGE_ARCH -or $asrResult.electron -ne '33.4.11' -or $asrResult.nodeAbi -ne '130') { throw 'Installed Electron ASR runtime platform, architecture, version, or ABI did not match the release target.' }
           if ($asrResult.sqliteQueryValue -ne 1 -or $asrResult.koffiVersion -ne '2.16.3') { throw 'Installed SQLite/Koffi runtime probes did not return their expected values.' }
           if ([string]::IsNullOrWhiteSpace($asrResult.text) -or $asrResult.reference -ne 'MISTER QUILTER IS THE APOSTLE OF THE MIDDLE CLASSES AND WE ARE GLAD TO WELCOME HIS GOSPEL' -or $null -eq $asrResult.wer -or [double]$asrResult.wer -gt 0.25) { throw 'Installed SenseVoice result is empty, references the wrong oracle, or exceeded the WER limit.' }
+      - name: Retain NSIS installer crash evidence and selected packaged binaries
+        if: ${{ always() && matrix.arch == 'arm64' && steps.verify_packaged_asr.outcome != 'success' }}
+        shell: pwsh
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          $taskDir = Join-Path 'tmp' 'release-${{ github.run_id }}'
+          $output = Join-Path 'release/staging/0.2.2' "windows-$env:PACKAGE_ARCH"
+          $unpackedDirName = if ($env:PACKAGE_ARCH -eq 'arm64') { 'win-arm64-unpacked' } else { 'win-unpacked' }
+          $unpackedRoot = Join-Path $output $unpackedDirName
+          $diagnosticRoot = Join-Path $taskDir 'installer-diagnostics-arm64'
+          New-Item -ItemType Directory -Path $diagnosticRoot -Force | Out-Null
+          $installer = Join-Path $output "OpenType-0.2.2-Windows-$env:PACKAGE_ARCH.exe"
+          if (Test-Path $installer) { Copy-Item $installer (Join-Path $diagnosticRoot ([IO.Path]::GetFileName($installer))) }
+          if (Test-Path $unpackedRoot) {
+            $unpackedRootItem = Get-Item -LiteralPath $unpackedRoot -Force
+            if (($unpackedRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Refusing to traverse a reparse-point unpacked root: $unpackedRoot" }
+            $unpackedRoot = (Resolve-Path -LiteralPath $unpackedRoot).Path
+            $resolvedUnpackedItem = Get-Item -LiteralPath $unpackedRoot -Force
+            if (($resolvedUnpackedItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Refusing to traverse a reparse-point resolved unpacked root: $unpackedRoot" }
+            $nativeRoot = Join-Path $diagnosticRoot 'unpacked-native'
+            $pendingDirectories = [Collections.Generic.Stack[string]]::new()
+            $pendingDirectories.Push($unpackedRoot)
+            $nativeBinaries = [Collections.Generic.List[object]]::new()
+            while ($pendingDirectories.Count -gt 0) {
+              $directory = $pendingDirectories.Pop()
+              foreach ($entry in Get-ChildItem -LiteralPath $directory -Force) {
+                if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Refusing to traverse or copy a reparse point from packaged output: $($entry.FullName)" }
+                if ($entry.PSIsContainer) { $pendingDirectories.Push($entry.FullName); continue }
+                if ($entry.Extension -in @('.dll','.exe','.node')) { $nativeBinaries.Add($entry) }
+              }
+            }
+            foreach ($nativeBinary in $nativeBinaries) {
+              $relative = [IO.Path]::GetRelativePath($unpackedRoot, $nativeBinary.FullName)
+              if ([IO.Path]::IsPathRooted($relative) -or $relative -eq '..' -or $relative.StartsWith("..$([IO.Path]::DirectorySeparatorChar)")) { throw "Refusing to copy a packaged binary outside the expected unpacked directory: $($nativeBinary.FullName)" }
+              $destination = Join-Path $nativeRoot $relative
+              New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+              Copy-Item $nativeBinary.FullName $destination
+            }
+          }
+          foreach ($evidenceName in @('installed-asr-arm64.json', 'installed-asr-arm64.stdout.txt', 'installed-asr-arm64.stderr.txt')) {
+            $evidencePath = Join-Path $taskDir $evidenceName
+            if (Test-Path $evidencePath) { Copy-Item $evidencePath (Join-Path $diagnosticRoot $evidenceName) }
+          }
+          Write-Host "Retaining task-only installer diagnostics under $diagnosticRoot"
+      - name: Upload task-only ARM64 installer failure diagnostics
+        if: ${{ always() && matrix.arch == 'arm64' && steps.verify_packaged_asr.outcome != 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: OpenType-Windows-arm64-installer-diagnostics-${{ github.sha }}
+          path: tmp/release-${{ github.run_id }}/installer-diagnostics-arm64/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Verify PE architectures, NSIS package, update feed, and checksums
         shell: pwsh
         env:
