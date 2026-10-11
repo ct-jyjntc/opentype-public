@@ -9,10 +9,13 @@ const DOWNLOADS = {
 const UPSTREAM_HOSTS = new Set(['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'api.opentype.top']);
 const REPOSITORY = 'ct-jyjntc/opentype-public';
 // GitHub's "latest" release is the newest stable one: drafts and prereleases are excluded.
-const LATEST_RELEASE_API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
-// Edge-cached so the unauthenticated GitHub API limit is never reached; a new release shows up within this time.
+const LATEST_DOWNLOAD_BASE = `https://github.com/${REPOSITORY}/releases/latest/download/`;
+// Edge-cached; a new release shows up within this time.
 const LATEST_CACHE_SECONDS = 300;
-const LATEST_CACHE_KEY = 'https://www.opentype.top/__cache/latest-stable-release-v2';
+const LATEST_CACHE_KEY = 'https://www.opentype.top/__cache/latest-stable-release-v3';
+// The last manifest read from GitHub, preferred over the static file while GitHub can't be read.
+const LAST_GOOD_CACHE_KEY = 'https://www.opentype.top/__cache/last-good-stable-release';
+const LAST_GOOD_CACHE_SECONDS = 30 * 24 * 3600;
 
 function fail(status, message) {
   return new Response(message, { status, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
@@ -53,26 +56,42 @@ async function streamFile(request, upstream, filename, immutable = false) {
   return new Response(request.method === 'HEAD' ? null : response.body, { status: response.status, headers: outgoing });
 }
 
-/** Build the download manifest from the latest stable GitHub release, or null if it can't be read. */
-async function fetchLatestManifest() {
+async function fetchText(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
-  let release;
   try {
-    const response = await fetch(LATEST_RELEASE_API, { headers: { 'user-agent': 'OpenType/website-downloads', accept: 'application/vnd.github+json' }, signal: controller.signal });
-    if (!response.ok) return null;
-    release = await response.json();
+    const response = await fetch(url, { headers: { 'user-agent': 'OpenType/website-downloads' }, signal: controller.signal });
+    return response.ok ? await response.text() : null;
   } catch { return null; }
   finally { clearTimeout(timeout); }
-  const version = /^v(\d+\.\d+\.\d+)$/.exec(release?.tag_name || '')?.[1];
-  if (!version || release.draft || release.prerelease) return null;
+}
+
+/** Version and file sizes from an electron-builder update feed, in the layout scripts/merge-stable-release-feeds.mjs writes. */
+function parseFeed(text) {
+  const version = /^version: (\d+\.\d+\.\d+)\s*$/m.exec(text || '')?.[1];
+  if (!version) return null;
+  const sizes = {};
+  for (const m of text.matchAll(/^ {2}- url: (\S+)\s*\n {4}sha512: \S+\s*\n {4}size: (\d+)\s*$/gm)) sizes[m[1]] = Number(m[2]);
+  return { version, sizes };
+}
+
+/**
+ * Build the download manifest from the latest stable release's update feeds and checksum list, or null if they can't be read.
+ * These are release downloads on github.com, not the REST API, so the API's shared anonymous rate limit does not apply.
+ */
+async function fetchLatestManifest() {
+  const feeds = (await Promise.all(['latest-mac.yml', 'latest.yml'].map(name => fetchText(LATEST_DOWNLOAD_BASE + name)))).map(parseFeed).filter(Boolean);
+  const version = feeds[0]?.version;
+  if (!version || feeds.some(feed => feed.version !== version)) return null;
+  const sizes = Object.assign({}, ...feeds.map(feed => feed.sizes));
+  const sums = {};
+  for (const m of ((await fetchText(`https://github.com/${REPOSITORY}/releases/download/v${version}/SHA256SUMS-${version}.txt`)) || '').matchAll(/^([0-9a-f]{64}) {2}(\S+)\s*$/gm)) sums[m[2]] = m[1];
   const files = {};
   for (const [path, { key, suffix }] of Object.entries(DOWNLOADS)) {
-    const asset = (release.assets || []).find(a => a.name === `OpenType-${version}-${suffix}` && a.state === 'uploaded');
-    if (!asset || !Number.isSafeInteger(asset.size) || asset.size <= 0) continue;
-    files[key] = { url: path, size: asset.size };
-    const sha256 = /^sha256:([0-9a-f]{64})$/.exec(asset.digest || '')?.[1];
-    if (sha256) files[key].sha256 = sha256;
+    const name = `OpenType-${version}-${suffix}`, size = sizes[name];
+    if (!Number.isSafeInteger(size) || size <= 0) continue;
+    files[key] = { url: path, size };
+    if (sums[name]) files[key].sha256 = sums[name];
   }
   return Object.keys(files).length ? { version, files } : null;
 }
@@ -85,12 +104,18 @@ async function downloadManifest(request, env, ctx) {
   const latest = await fetchLatestManifest();
   if (latest) {
     const stored = new Response(JSON.stringify(latest), { headers: { 'content-type': 'application/json', 'cache-control': `public, max-age=${LATEST_CACHE_SECONDS}` } });
-    ctx?.waitUntil?.(cache.put(key, stored));
+    const lastGood = new Response(JSON.stringify(latest), { headers: { 'content-type': 'application/json', 'cache-control': `public, max-age=${LAST_GOOD_CACHE_SECONDS}` } });
+    ctx?.waitUntil?.(Promise.all([cache.put(key, stored), cache.put(new Request(LAST_GOOD_CACHE_KEY), lastGood)]));
     return latest;
   }
-  const fallback = await env.ASSETS.fetch(new Request(new URL('/downloads/manifest.json', request.url)));
-  if (!fallback.ok) return null;
-  const manifest = await fallback.json();
+  let manifest;
+  const lastGood = await cache.match(new Request(LAST_GOOD_CACHE_KEY));
+  if (lastGood) manifest = await lastGood.json();
+  else {
+    const fallback = await env.ASSETS.fetch(new Request(new URL('/downloads/manifest.json', request.url)));
+    if (!fallback.ok) return null;
+    manifest = await fallback.json();
+  }
   // Back off briefly while GitHub is unreachable or rate-limited instead of retrying on every request.
   ctx?.waitUntil?.(cache.put(key, new Response(JSON.stringify(manifest), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=60' } })));
   return manifest;
