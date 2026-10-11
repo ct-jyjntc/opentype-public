@@ -480,7 +480,11 @@ private func prepareContextEdit(_ token: String, _ text: String, _ editJSON: Str
         return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported")
     }
     let setResult = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, expandedValue)
-    if setResult != .success, currentContextMatches(target, value: value, range: range) { return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported") }
+    if setResult == .attributeUnsupported {
+        guard currentContextMatches(target, value: value, range: range) else { return .refused("stale") }
+        return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported")
+    }
+    guard setResult == .success else { return .refused("stale") }
     guard currentContextMatches(target, value: value, range: expandedRange) else {
         // Restore only while the same field/value still has exactly the range
         // this operation selected. Any other state is left untouched.
