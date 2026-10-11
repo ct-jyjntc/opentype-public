@@ -1048,8 +1048,7 @@ async function pasteLastTranscript(): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, 20))
     }
     if (pressedKeys.size) throw new Error('请松开快捷键后重试，文字尚未粘贴。')
-    const result = await deliverToInput(InputDelivery, target, text, controller.signal)
-    if (result.status === 'unverified' && result.detail) openInteractiveCard({ title: '请核对粘贴结果', text, detail: result.detail })
+    await deliverToInput(InputDelivery, target, text, controller.signal)
   } catch (error) {
     if (!controller.signal.aborted) {
       const detail = (error as Error).message
