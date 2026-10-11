@@ -31,8 +31,8 @@ export interface InputDeliveryNative {
   ready(token: string): { ok?: boolean; reason?: string }
   commit(token: string, text: string, contextEdit?: ContextEdit): {
     submitted?: boolean; method?: string; uncertain?: boolean; reason?: string
-    contextEditApplied?: boolean; contextEditReason?: string
-  } | Promise<{ submitted?: boolean; method?: string; uncertain?: boolean; reason?: string; contextEditApplied?: boolean; contextEditReason?: string }>
+    contextEditApplied?: boolean; contextEditReason?: string; retryable?: boolean
+  } | Promise<{ submitted?: boolean; method?: string; uncertain?: boolean; reason?: string; contextEditApplied?: boolean; contextEditReason?: string; retryable?: boolean }>
   verify(token: string): { status?: 'verified' | 'unverified' | 'pending'; blind?: boolean; reason?: string }
 }
 
@@ -46,10 +46,10 @@ export async function deliverToInput(
   signal.throwIfAborted()
   if (!snapshot.token) throw new Error(snapshot.reason || 'injection_target_unavailable')
   const token = snapshot.token
-  if (!contextEdit) {
-    const prepared = await native.prepare(token)
-    if (!prepared.ok) throw new Error(prepared.reason || 'injection_target_unavailable')
-  }
+  // An edit with no side is just the body: deliver it the ordinary way.
+  if (contextEdit && !contextEdit.before && !contextEdit.after) contextEdit = undefined
+  const prepared = await native.prepare(token)
+  if (!prepared.ok) throw new Error(prepared.reason || 'injection_target_unavailable')
   let ready = false, pendingReason = 'injection_target_unavailable'
   for (let attempt = 0; attempt < 20; attempt++) {
     signal.throwIfAborted()
@@ -76,6 +76,13 @@ export async function deliverToInput(
     ...(committed.contextEditReason ? { contextEditReason: committed.contextEditReason } : {}),
   }
   if (committed.reason === 'injection_already_sent') return { status: 'unverified', method: committed.method || 'unknown', detail: committed.reason, ...contextOutcome }
+  // The strict edit was refused before anything was posted (target moved, field
+  // changed, edit unsupported). The punctuation tweak is optional; the text is not.
+  // Native sets retryable:false when the expanded selection may still be in place.
+  if (contextEdit && !committed.submitted && committed.contextEditReason && committed.retryable !== false) {
+    const plain = await deliverToInput(native, snapshot, text, signal, undefined, pause)
+    return { ...plain, contextEditApplied: false, contextEditReason: committed.contextEditReason }
+  }
   if (!committed.submitted && !committed.reason) return { status: 'unverified', method: 'unknown', detail: 'injection_unverified', ...contextOutcome }
   if (!committed.submitted) throw new Error(committed.reason || 'injection_failed')
   const method = committed.method || 'unknown'

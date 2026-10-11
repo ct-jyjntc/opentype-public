@@ -282,19 +282,13 @@ final class TextInjector: @unchecked Sendable {
 
     private static let accessibilityQueue = DispatchQueue(label: "com.vocamac.text-accessibility", qos: .userInitiated)
 
-    private func matches(_ target: StrictInputTarget) -> Bool {
+    private func matches(_ target: StrictInputTarget, checkDocument: Bool = false) -> Bool {
         guard frontmostPIDProvider() == target.processID else { return false }
-        var focusedRef: CFTypeRef?
-        let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, 0.1)
         AXUIElementSetMessagingTimeout(target.element, 0.1)
-        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-              let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return false }
-        // swiftlint:disable force_cast
-        let focused = focusedRef as! AXUIElement
-        var pid: pid_t = 0
-        guard AXUIElementGetPid(focused, &pid) == .success, pid == target.processID, CFEqual(focused, target.element) else { return false }
-        // swiftlint:enable force_cast
+        // Ask the app, as capture does: system-wide focus is often unreadable
+        // (kAXErrorCannotComplete) even while the app reports its field.
+        guard let app = NSRunningApplication(processIdentifier: target.processID),
+              let focused = focusedTarget(app: app, diagnostics: false), CFEqual(focused, target.element) else { return false }
         var rawWindow: CFTypeRef?
         let windowError = AXUIElementCopyAttributeValue(target.element, kAXWindowAttribute as CFString, &rawWindow)
         let currentWindow = windowError == .success ? (rawWindow.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }) : nil
@@ -302,7 +296,8 @@ final class TextInjector: @unchecked Sendable {
               let currentValue = try? accessibilityString(target.element, kAXValueAttribute as String), currentValue == target.value,
               let currentRange = accessibilityRange(target.element), currentRange.location == target.range.location,
               currentRange.length == target.range.length else { return false }
-        let web = targetWebContext(target.element, maximumDepth: 16, messagingTimeout: 0.02)
+        guard checkDocument else { return true }
+        let web = targetWebContext(target.element, messagingTimeout: 0.1)
         return web.urls == target.documentURLs && web.redacted == target.webRedacted
     }
 
@@ -357,7 +352,7 @@ final class TextInjector: @unchecked Sendable {
                 completion()
             } else {
                 let currentPID = frontmostPIDProvider()
-                if samePasteTarget(targetPID, currentPID), strictTarget.map(matches) ?? true {
+                if samePasteTarget(targetPID, currentPID), strictTarget.map { matches($0) } ?? true {
                     processClipboardInjection(
                         ClipboardInjectionRequest(text: text, preserveClipboard: preserveClipboard, targetPID: targetPID, strictTarget: strictTarget, report: report),
                         completion: completion
@@ -369,6 +364,13 @@ final class TextInjector: @unchecked Sendable {
                     completion()
                 }
             }
+        }
+        // A strict edit replaces the selection this delivery set and verified.
+        // Chromium can accept an AX selected-text write without applying it,
+        // so paste, which replaces exactly that selection.
+        if strictTarget != nil {
+            deliverFallback(.unavailable)
+            return
         }
         if let accessibilityInjectionOverride {
             deliverFallback(accessibilityInjectionOverride(text) ? .inserted : .unavailable)
@@ -384,7 +386,7 @@ final class TextInjector: @unchecked Sendable {
             let interval = PerformanceTrace.begin("TextAccessibilityQueryAndWrite")
             let inserted = accessibilityWorkerOverride.map {
                 $0(text) ? AccessibilityInsertion.inserted : .unavailable
-            } ?? injectViaAccessibility(text: text, targetPID: targetPID, strictTarget: strictTarget)
+            } ?? injectViaAccessibility(text: text, targetPID: targetPID)
             PerformanceTrace.end(interval)
             deliverFallback(inserted)
             return
@@ -392,7 +394,7 @@ final class TextInjector: @unchecked Sendable {
         Self.accessibilityQueue.async { [self] in
             let interval = PerformanceTrace.begin("TextAccessibilityQueryAndWrite")
             let inserted = accessibilityWorkerOverride.map { $0(text) ? AccessibilityInsertion.inserted : .unavailable }
-                ?? injectViaAccessibility(text: text, targetPID: targetPID, strictTarget: strictTarget)
+                ?? injectViaAccessibility(text: text, targetPID: targetPID)
             PerformanceTrace.end(interval)
             DispatchQueue.main.async { deliverFallback(inserted) }
         }
@@ -424,7 +426,7 @@ final class TextInjector: @unchecked Sendable {
     ///            unsupported role, cannot take the write, or rejected it;
     ///            `.uncertain` if the write timed out and may still land.
     @discardableResult
-    private func injectViaAccessibility(text: String, targetPID: pid_t?, strictTarget: StrictInputTarget? = nil) -> AccessibilityInsertion {
+    private func injectViaAccessibility(text: String, targetPID: pid_t?) -> AccessibilityInsertion {
         let systemWide = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(systemWide, 0.1)
         var focusedRef: CFTypeRef?
@@ -434,29 +436,24 @@ final class TextInjector: @unchecked Sendable {
             kAXFocusedUIElementAttribute as CFString,
             &focusedRef
         )
-        if strictTarget == nil {
-            guard fetchResult == .success, let focusedRef else {
-                VocaLogger.debug(.textInjector, "AX: no focused element (\(fetchResult.rawValue))")
-                return .unavailable
-            }
+        guard fetchResult == .success, let focusedRef else {
+            VocaLogger.debug(.textInjector, "AX: no focused element (\(fetchResult.rawValue))")
+            return .unavailable
         }
 
         // The returned CFTypeRef must be an AXUIElement.
-        guard let element: AXUIElement = {
-            if let strictTarget { return strictTarget.element }
-            guard let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return nil }
-            // swiftlint:disable force_cast
-            return focusedRef as! AXUIElement
-            // swiftlint:enable force_cast
-        }() else {
+        guard CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
             VocaLogger.debug(.textInjector, "AX: focused element is not an AXUIElement")
             return .unavailable
         }
+
+        // swiftlint:disable force_cast
+        let element = focusedRef as! AXUIElement
         var elementPID: pid_t = 0
         guard AXUIElementGetPid(element, &elementPID) == .success,
               elementPID == targetPID || Self.isLauncherPanelOwner(elementPID) else { return .unavailable }
         AXUIElementSetMessagingTimeout(element, 0.1)
-        if let strictTarget, !matches(strictTarget) { return .unavailable }
+        // swiftlint:enable force_cast
 
         // Gate on element role. Only single-line input fields reliably handle
         // a direct kAXSelectedTextAttribute write as "insert text at cursor".
@@ -480,8 +477,12 @@ final class TextInjector: @unchecked Sendable {
             VocaLogger.debug(.textInjector, "AX: selected text not settable (role: \(role)) — using Cmd+V")
             return .unavailable
         }
-        if let strictTarget, !matches(strictTarget) { return .unavailable }
-
+        // OpenType: a Chromium web field (Edge, Chrome, Electron apps) reports
+        // the write as successful yet drops it, so web content always pastes.
+        if Self.isInsideWebArea(element) {
+            VocaLogger.debug(.textInjector, "AX: web field (role: \(role)) — using Cmd+V")
+            return .unavailable
+        }
         // A timed-out write may still be applied by the target. It must never
         // trigger an automatic second insertion via Cmd+V.
         let setResult = AXUIElementSetAttributeValue(
@@ -496,7 +497,26 @@ final class TextInjector: @unchecked Sendable {
         }
 
         VocaLogger.debug(.textInjector, "AX: kAXSelectedTextAttribute write failed (\(setResult.rawValue)) — element may be read-only")
-        return setResult == .cannotComplete || strictTarget != nil ? .uncertain : .unavailable
+        return setResult == .cannotComplete ? .uncertain : .unavailable
+    }
+
+    private static func isInsideWebArea(_ element: AXUIElement) -> Bool {
+        var current: AXUIElement? = element
+        for _ in 0..<64 {
+            guard let node = current else { return false }
+            AXUIElementSetMessagingTimeout(node, 0.1)
+            var role: CFTypeRef?
+            AXUIElementCopyAttributeValue(node, kAXRoleAttribute as CFString, &role)
+            if role as? String == "AXWebArea" { return true }
+            if role as? String == "AXWindow" || role as? String == "AXApplication" { return false }
+            // An unreadable ancestor (slow Chromium tree) is treated as web: paste is safe everywhere.
+            var parent: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(node, kAXParentAttribute as CFString, &parent) == .success,
+                  let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { return true }
+            // swiftlint:disable:next force_cast
+            current = (parent as! AXUIElement)
+        }
+        return true
     }
 
     /// Whether the focused field belongs to a menu bar app's panel, such as
@@ -599,7 +619,7 @@ final class TextInjector: @unchecked Sendable {
                     request.report?(.failed(mismatchReason(queued: request.targetPID, current: pidBeforePaste)))
                     return
                 }
-                if let strictTarget = request.strictTarget, !matches(strictTarget) {
+                if let strictTarget = request.strictTarget, !matches(strictTarget, checkDocument: true) {
                     if request.preserveClipboard, pasteboard.changeCount == expectedChangeCount {
                         if let snapshot { restoreSnapshot(snapshot, to: pasteboard) }
                         else { pasteboard.clearContents() }

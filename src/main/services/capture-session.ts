@@ -342,6 +342,7 @@ export class CaptureSession {
           let delivered: DeliveryOutcome | void
           const contextEdit = s.settings.mode === 'voice_transcript'
             && Boolean(s.target.inputToken) && s.target.audioContext.redacted !== true
+            && (result.contextEdit?.before || result.contextEdit?.after)
             ? result.contextEdit : undefined
           try {
             delivered = await this.deps.inject(result.text, s.target, signal, contextEdit)
@@ -361,12 +362,13 @@ export class CaptureSession {
           // A submitted write cannot be unsent by cancelling its verification.
           if (!delivered) signal.throwIfAborted()
           if (delivered) {
-            result.detail = delivered.detail ?? result.detail
+            // A refinement failure (raw text inserted) matters more than an unconfirmed paste.
+            result.detail = result.detail ?? delivered.detail
             try {
               await this.deps.saveHistory({ id: s.id, status: 'completed',
                 modeMeta: JSON.stringify({ ...meta, raw_text: result.rawText ?? '', delivery: result.delivery,
                   input_delivery: delivered.status, input_method: delivered.method,
-                  ...(result.contextEdit ? {
+                  ...(contextEdit ? {
                     context_edit_applied: typeof delivered.contextEditApplied === 'boolean' ? delivered.contextEditApplied : null,
                     ...(delivered.contextEditReason ? { context_edit_reason: delivered.contextEditReason } : {}),
                   } : {}) }),

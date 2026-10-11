@@ -270,7 +270,8 @@ function FloatingBar() {
   if (state.phase === 'idle') return null
   // Mode is shown by colour only: dictation white, translation blue, ask-anything green.
   const mode = state.mode === 'voice_translation' ? 'translate' : state.mode === 'voice_command' ? 'ask' : 'dictate'
-  const suppressDoneInjectionNotice = state.phase === 'done' && state.detail?.startsWith('injection_')
+  const suppressDoneInjectionNotice = state.phase === 'done'
+    && (state.detail === 'injection_unverified' || state.detail === 'injection_cancelled_after_send' || state.detail === 'injection_already_sent')
   const noticeText = [...new Set([suppressDoneInjectionNotice ? undefined : state.detail, state.audioNotice].filter(Boolean).map(errorMessage))].join('；')
   const errorText = state.phase === 'error' ? noticeText || labels.error : ''
   // The capsule has room for one short clause; the full reason stays in the tooltip.

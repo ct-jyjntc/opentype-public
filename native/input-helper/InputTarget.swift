@@ -100,9 +100,9 @@ private func editableTarget(_ element: AXUIElement, failure: ((String) -> Void)?
     }
     return nil
 }
-private func focusedTarget(app: NSRunningApplication) -> AXUIElement? {
+func focusedTarget(app: NSRunningApplication, diagnostics: Bool = true) -> AXUIElement? {
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-          let element = focusedElement(app: app).element else { return nil }
+          let element = focusedElement(app: app, diagnostics: diagnostics).element else { return nil }
     return editableTarget(element)
 }
 
@@ -143,7 +143,7 @@ private func focusAttribute(on element: AXUIElement) -> (element: AXUIElement?, 
 /// Accept app focus only when AX confirms it belongs to that exact process;
 /// otherwise fall back to the system-wide value and retain the caller's PID
 /// checks before capture can become an insertion target.
-private func focusedElement(app: NSRunningApplication?) -> FocusResult {
+private func focusedElement(app: NSRunningApplication?, diagnostics: Bool = true) -> FocusResult {
     var appError: AXError?
     if let app, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
         let appFocus = focusAttribute(on: AXUIElementCreateApplication(app.processIdentifier))
@@ -154,8 +154,8 @@ private func focusedElement(app: NSRunningApplication?) -> FocusResult {
                 // Keep the app result authoritative, while sampling the global
                 // error for diagnostics so app-first successes explain why
                 // they differ from the previous system-only path.
-                let globalDiagnostic = focusAttribute(on: AXUIElementCreateSystemWide())
-                return FocusResult(element: element, error: .success, source: "application", globalError: globalDiagnostic.error,
+                let globalDiagnostic = diagnostics ? focusAttribute(on: AXUIElementCreateSystemWide()).error : nil
+                return FocusResult(element: element, error: .success, source: "application", globalError: globalDiagnostic,
                                    appError: appFocus.error, initialFocusError: Int(appFocus.error.rawValue))
             }
         }
@@ -407,7 +407,8 @@ private func commitInputTargetOnMain(_ tokenPtr: UnsafePointer<CChar>?, _ textPt
 
 private enum ContextPreparation {
     case ready(ContextInjection)
-    case refused(String)
+    /// `selected` is the expanded range this delivery may have left selected.
+    case refused(String, selected: CFRange? = nil)
 }
 private struct ContextInjection {
     let strictTarget: TextInjector.StrictInputTarget
@@ -417,22 +418,33 @@ private struct ContextInjection {
     let reason: String?
 }
 
-private func contextFieldMatches(_ target: InputTarget, value: String) -> Bool {
+/// `checkDocument` adds the ancestor URL walk, which is costly on the main thread;
+/// the injector repeats it once right before the paste.
+private func contextFieldMatches(_ target: InputTarget, value: String, checkDocument: Bool) -> Bool {
     guard target.ready() == nil, let element = target.element else { return false }
     AXUIElementSetMessagingTimeout(element, 0.1)
     let currentWindow = targetElement(targetAttr(element, kAXWindowAttribute as String))
-    let currentWeb = targetWebContext(element, maximumDepth: 16, messagingTimeout: 0.02)
     guard let expectedWindow = target.window, let currentWindow, CFEqual(expectedWindow, currentWindow),
-          let focused = focusedTarget(app: target.app), CFEqual(focused, element),
-          currentWeb.urls == target.webUrls, currentWeb.redacted == target.webRedacted,
+          let focused = focusedTarget(app: target.app, diagnostics: false), CFEqual(focused, element),
           targetAttr(element, kAXValueAttribute as String) as? String == value else { return false }
-    return true
+    guard checkDocument else { return true }
+    let currentWeb = targetWebContext(element, messagingTimeout: 0.1)
+    return currentWeb.urls == target.webUrls && currentWeb.redacted == target.webRedacted
 }
-private func currentContextMatches(_ target: InputTarget, value: String, range: CFRange) -> Bool {
-    guard contextFieldMatches(target, value: value), let element = target.element,
+private func currentContextMatches(_ target: InputTarget, value: String, range: CFRange, checkDocument: Bool = false) -> Bool {
+    guard contextFieldMatches(target, value: value, checkDocument: checkDocument), let element = target.element,
           let currentRange = targetRange(element), currentRange.location == range.location,
           currentRange.length == range.length else { return false }
     return true
+}
+
+/// Chromium applies an AX selection change asynchronously; poll briefly for it.
+private func waitForRange(_ element: AXUIElement, _ range: CFRange) -> Bool {
+    for attempt in 0..<10 {
+        if let current = targetRange(element), current.location == range.location, current.length == range.length { return true }
+        if attempt < 9 { usleep(20_000) }
+    }
+    return false
 }
 
 private func prepareBodyOnlyContextFallback(_ target: InputTarget, text: String, reason: String) -> ContextPreparation {
@@ -459,7 +471,7 @@ private func prepareContextEdit(_ token: String, _ text: String, _ editJSON: Str
     if let reason = target.ready() { return .refused(reason) }
     guard !text.isEmpty else { return .refused("injection_failed") }
     guard let element = target.element, let value = target.value, let range = target.range else { return .refused("unsupported") }
-    guard currentContextMatches(target, value: value, range: range) else { return .refused("stale") }
+    guard currentContextMatches(target, value: value, range: range, checkDocument: true) else { return .refused("stale") }
     guard let edit = parseContextEdit(editJSON) else { return prepareBodyOnlyContextFallback(target, text: text, reason: "invalid") }
     if edit.before == nil && edit.after == nil { return prepareBodyOnlyContextFallback(target, text: text, reason: "body_only") }
     if target.webRedacted { return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported") }
@@ -484,21 +496,14 @@ private func prepareContextEdit(_ token: String, _ text: String, _ editJSON: Str
         guard currentContextMatches(target, value: value, range: range) else { return .refused("stale") }
         return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported")
     }
-    guard setResult == .success else { return .refused("stale") }
-    guard currentContextMatches(target, value: value, range: expandedRange) else {
-        // Restore only while the same field/value still has exactly the range
-        // this operation selected. Any other state is left untouched.
-        if currentContextMatches(target, value: value, range: expandedRange) {
-            if let originalValue = targetRangeValue(range) {
-                _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, originalValue)
-            }
-        }
-        return .refused("stale")
-    }
+    // A timed-out set may still apply, so every refusal from here on names the expanded range.
+    guard setResult == .success else { return .refused("stale", selected: expandedRange) }
+    guard waitForRange(element, expandedRange),
+          currentContextMatches(target, value: value, range: expandedRange) else { return .refused("stale", selected: expandedRange) }
     let payload = (edit.before?.replacement ?? "") + text + (edit.after?.replacement ?? "")
-    guard let expected = expectedInsertion(value, expandedRange, payload) else { return .refused("invalid") }
+    guard let expected = expectedInsertion(value, expandedRange, payload) else { return .refused("invalid", selected: expandedRange) }
     let beforeReplacementLength = ((edit.before?.replacement ?? "") as NSString).length
-    guard let observationBase = expectedInsertion(value, expandedRange, (edit.before?.replacement ?? "") + (edit.after?.replacement ?? "")) else { return .refused("invalid") }
+    guard let observationBase = expectedInsertion(value, expandedRange, (edit.before?.replacement ?? "") + (edit.after?.replacement ?? "")) else { return .refused("invalid", selected: expandedRange) }
     target.expected = expected
     target.insertedText = text
     target.observationBaseValue = observationBase
@@ -513,11 +518,23 @@ private func prepareContextEdit(_ token: String, _ text: String, _ editJSON: Str
     ))
 }
 
-private func restoreContextSelectionIfSafe(_ token: String, _ strictTarget: TextInjector.StrictInputTarget, _ originalRange: CFRange) {
-    guard let target = inputTargets[token], let element = target.element,
-          currentContextMatches(target, value: strictTarget.value, range: strictTarget.range),
-          let value = targetRangeValue(originalRange) else { return }
-    _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
+/// True when the field is back at (or never left) the captured selection, so a
+/// plain delivery cannot replace neighbouring text. Restores only while the
+/// same field still holds the same value with exactly `selected` selected;
+/// focus and document checks are deliberately not required here.
+private func restoreContextSelection(_ token: String, selected: CFRange?) -> Bool {
+    guard let selected else { return true }
+    guard let target = inputTargets[token], let element = target.element, let value = target.value, let original = target.range,
+          targetAttr(element, kAXValueAttribute as String) as? String == value,
+          let current = targetRange(element) else { return false }
+    // Write the original back even when it already reads as original: a timed-out
+    // or cached select may still apply, and this write is queued after it.
+    let atOriginal = current.location == original.location && current.length == original.length
+    let atSelected = current.location == selected.location && current.length == selected.length
+    guard atOriginal || atSelected,
+          let originalValue = targetRangeValue(original),
+          AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, originalValue) == .success else { return false }
+    return waitForRange(element, original)
 }
 
 /// One shared injector: VocaMac serializes every clipboard delivery through it.
@@ -571,11 +588,12 @@ private func commitInputTargetWithContextEditThroughInjector(
     guard let tokenPtr, let textPtr, let editPtr else { return targetJSON(["reason": "injection_target_unavailable", "contextEditApplied": false]) }
     let token = String(cString: tokenPtr), text = String(cString: textPtr), editJSON = String(cString: editPtr)
     switch onTargetMain({ prepareContextEdit(token, text, editJSON) }) {
-    case .refused(let reason):
+    case .refused(let reason, let selected):
         if reason == "already_sent" {
             return targetJSON(["submitted": true, "uncertain": true, "reason": "injection_already_sent", "contextEditReason": "unknown"])
         }
-        return targetJSON(["reason": "injection_target_changed", "contextEditApplied": false, "contextEditReason": reason])
+        let retryable = onTargetMain { restoreContextSelection(token, selected: selected) }
+        return targetJSON(["reason": "injection_target_changed", "contextEditApplied": false, "contextEditReason": reason, "retryable": retryable])
     case .ready(let injection):
         let waiter = DeliveryWaiter()
         textInjector.inject(text: injection.payload, preserveClipboard: true, strictTarget: injection.strictTarget) { waiter.report($0) }
@@ -594,8 +612,8 @@ private func commitInputTargetWithContextEditThroughInjector(
         case .uncertain:
             return targetJSON(["submitted": true, "method": "accessibility", "uncertain": true, "contextEditReason": "uncertain"])
         case .failed(let reason):
-            onTargetMain {
-                restoreContextSelectionIfSafe(token, injection.strictTarget, injection.originalRange)
+            let retryable = onTargetMain {
+                let restored = restoreContextSelection(token, selected: injection.strictTarget.range)
                 if let target = inputTargets[token] {
                     target.submitted = false
                     target.expected = nil
@@ -604,8 +622,9 @@ private func commitInputTargetWithContextEditThroughInjector(
                     target.observationBaseRange = nil
                     target.observationAfterPadding = 0
                 }
+                return restored
             }
-            return targetJSON(["reason": reason, "contextEditApplied": false, "contextEditReason": "delivery_failed"])
+            return targetJSON(["reason": reason, "contextEditApplied": false, "contextEditReason": "delivery_failed", "retryable": retryable])
         case nil:
             return targetJSON(["submitted": true, "method": "unknown", "uncertain": true, "contextEditReason": "uncertain"])
         }

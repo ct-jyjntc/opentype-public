@@ -191,8 +191,7 @@ bool focused(const Target& target) {
   if(!target.field)return true;
   ComPtr<IUIAutomationElement> current;BOOL same=FALSE;auto* api=ot::automation();
   if(!api||FAILED(api->GetFocusedElement(&current))||!current||FAILED(api->CompareElements(current.Get(),target.element.Get(),&same))||!same)return false;
-  bool hidden=false;auto urls=webURLs(target.element.Get(),&hidden);bool redacted=hidden||(browser(target.pid)&&urls.empty());
-  return urls==target.urls&&redacted==target.webRedacted;
+  return webURLs(target.element.Get())==target.urls;
 }
 std::shared_ptr<Target> targetFor(const std::string& token) {
   auto found=targets.find(token);if(found==targets.end())throw std::runtime_error("injection_target_closed");return found->second;
@@ -354,6 +353,8 @@ std::string commit(Target& target,const std::wstring& text,const std::string& ht
 // keys would then arrive as shortcuts. Wait briefly off the UI thread.
 bool strictSnapshotMatches(const Target& target,const std::wstring& value,int start,int end){
   if(!target.field||!focused(target))return false;
+  // Only the strict edit also requires the same redaction verdict; plain delivery keeps its URL check.
+  bool hidden=false;auto urls=webURLs(target.element.Get(),&hidden);if((hidden||(browser(target.pid)&&urls.empty()))!=target.webRedacted)return false;
   try{auto current=read(target.element.Get());return current.writable&&current.value==value&&current.start==start&&current.end==end;}
   catch(...){return false;}
 }
@@ -393,7 +394,7 @@ std::string commitContextEdit(Target& target,const std::wstring& text,const std:
       if(neighbors&&beforeLength&&(FAILED(expanded->MoveEndpointByUnit(TextPatternRangeEndpoint_Start,TextUnit_Character,-beforeLength,&moved))||moved!=-beforeLength))neighbors=false;
       moved=0;
       if(neighbors&&afterLength&&(FAILED(expanded->MoveEndpointByUnit(TextPatternRangeEndpoint_End,TextUnit_Character,afterLength,&moved))||moved!=afterLength))neighbors=false;
-      if(neighbors&&rangeText(expanded.Get(),32)!=target.original.value.substr(expandedStart,expandedEnd-expandedStart))neighbors=false;
+      if(neighbors){try{if(rangeText(expanded.Get(),32)!=target.original.value.substr(expandedStart,expandedEnd-expandedStart))neighbors=false;}catch(...){neighbors=false;}}
       if(neighbors&&strictSnapshotMatches(target,target.original.value,originalStart,originalEnd)){
         if(SUCCEEDED(expanded->Select())&&strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)){
           payload=(edit.before?edit.before->replacement:L"")+text+(edit.after?edit.after->replacement:L"");applied=true;
@@ -424,6 +425,7 @@ std::string commitContextEdit(Target& target,const std::wstring& text,const std:
   target.observationAfterPadding=static_cast<int>(afterReplacement.size());target.hasObservationBase=true;
   if(clipboardLease){clipboardLease->restore();if(!clipboardLease->waitForExit(4000)){
       if(strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)&&originalSelection)originalSelection->Select();
+      target.expected.clear();target.inserted.clear();target.hasObservationBase=false;
       return contextResponse(false,false,"",false,fallbackReason,"injection_clipboard_unavailable");
     }clipboardLease.reset();}
   DWORD sequence=0;
@@ -458,9 +460,15 @@ std::string commitContextEdit(Target& target,const std::wstring& text,const std:
     for(UINT i=0;i<releaseCount;i++){release[i].ki.dwFlags=KEYEVENTF_KEYUP;release[i].ki.dwExtraInfo=ot::inputMarker;}
     if(releaseCount)SendInput(releaseCount,release,sizeof(INPUT));
   }
+  if(sent==0){
+    // Nothing reached the input queue: report it unsent so the text can be delivered plainly.
+    target.submitted=false;restoreClipboard();target.expected.clear();target.inserted.clear();target.hasObservationBase=false;
+    if(applied&&originalSelection&&strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))originalSelection->Select();
+    return contextResponse(false,false,"",false,fallbackReason,"injection_failed");
+  }
   if(clipboardLease)clipboardLease->posted();
   if(sent<4)return contextResponse(true,true,"windows_clipboard",false,"uncertain");
-  return contextResponse(true,false,"windows_clipboard",applied,fallbackReason);
+  return contextResponse(true,false,"windows_clipboard",applied,applied?nullptr:fallbackReason);
 }
 void waitForModifiers(){for(int waited=0;waited<600&&modifiersHeld();waited+=15)Sleep(15);if(!modifiersHeld())Sleep(30);}
 template<class F> char* respond(F action){try{return ot::result(ot::system(std::move(action)));}catch(const std::exception& error){return ot::result(ot::failure(error.what()));}catch(...){return ot::result(ot::failure("injection_bridge_error"));}}
