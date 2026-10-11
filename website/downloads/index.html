@@ -161,7 +161,9 @@
         var cards = [].slice.call(document.querySelectorAll("[data-pkg]"));
         Promise.all([DL.detect(), DL.loadManifest()]).then(function (r) {
           var pick = r[0], release = r[1];
-          if (release) document.getElementById("dl-lead").textContent = "最新正式版 " + release.version + "。选择与你的系统和芯片对应的安装包。";
+          var lead = document.getElementById("dl-lead");
+          if (release) lead.textContent = "最新正式版 " + release.version + "。选择与你的系统和芯片对应的安装包。";
+          else lead.innerHTML = '暂时读取不到最新版本信息，可以稍后刷新，或前往 <a href="https://github.com/ct-jyjntc/opentype-public/releases/latest" rel="noopener">GitHub 发布页</a>下载。';
           cards.forEach(function (card) {
             var key = card.getAttribute("data-pkg"), btn = card.querySelector(".x-btn"), f = release && release.files[key];
             var isPick = key === pick;

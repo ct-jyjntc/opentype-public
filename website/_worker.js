@@ -13,7 +13,9 @@ const LATEST_DOWNLOAD_BASE = `https://github.com/${REPOSITORY}/releases/latest/d
 // Edge-cached; a new release shows up within this time.
 const LATEST_CACHE_SECONDS = 300;
 const LATEST_CACHE_KEY = 'https://www.opentype.top/__cache/latest-stable-release-v3';
-// The last manifest read from GitHub, preferred over the static file while GitHub can't be read.
+// The last manifest read from GitHub, used while GitHub can't be read. There is no static fallback:
+// it went stale between releases and advertised an old version.
+const LATEST_RELEASE_PAGE = `https://github.com/${REPOSITORY}/releases/latest`;
 const LAST_GOOD_CACHE_KEY = 'https://www.opentype.top/__cache/last-good-stable-release';
 const LAST_GOOD_CACHE_SECONDS = 30 * 24 * 3600;
 
@@ -96,8 +98,8 @@ async function fetchLatestManifest() {
   return Object.keys(files).length ? { version, files } : null;
 }
 
-/** Latest stable manifest (edge-cached), falling back to the static manifest shipped with the site. */
-async function downloadManifest(request, env, ctx) {
+/** Latest stable manifest (edge-cached), falling back to the last one read from GitHub, or null. */
+async function downloadManifest(ctx) {
   const cache = caches.default, key = new Request(LATEST_CACHE_KEY);
   const cached = await cache.match(key);
   if (cached) return cached.json();
@@ -108,14 +110,9 @@ async function downloadManifest(request, env, ctx) {
     ctx?.waitUntil?.(Promise.all([cache.put(key, stored), cache.put(new Request(LAST_GOOD_CACHE_KEY), lastGood)]));
     return latest;
   }
-  let manifest;
   const lastGood = await cache.match(new Request(LAST_GOOD_CACHE_KEY));
-  if (lastGood) manifest = await lastGood.json();
-  else {
-    const fallback = await env.ASSETS.fetch(new Request(new URL('/downloads/manifest.json', request.url)));
-    if (!fallback.ok) return null;
-    manifest = await fallback.json();
-  }
+  if (!lastGood) return null;
+  const manifest = await lastGood.json();
   // Back off briefly while GitHub is unreachable or rate-limited instead of retrying on every request.
   ctx?.waitUntil?.(cache.put(key, new Response(JSON.stringify(manifest), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=60' } })));
   return manifest;
@@ -133,13 +130,15 @@ export default {
     if (DOWNLOADS[url.pathname]) {
       if (url.search) return fail(404, '文件不存在。');
       const info = DOWNLOADS[url.pathname];
-      const manifest = await downloadManifest(request, env, ctx);
+      const manifest = await downloadManifest(ctx);
+      // Without any version information, send the visitor to the release page rather than an error.
+      if (!manifest) return Response.redirect(LATEST_RELEASE_PAGE, 302);
       if (!/^\d+\.\d+\.\d+(?:-[a-z]+\.\d+)?$/.test(manifest?.version || '') || !manifest.files?.[info.key]) return fail(404, '该平台安装包暂未提供。');
       const filename = `OpenType-${manifest.version}-${info.suffix}`;
       return streamFile(request, `https://github.com/ct-jyjntc/opentype-public/releases/download/v${manifest.version}/${filename}`, filename);
     }
     if (url.pathname === '/downloads/manifest.json') {
-      const manifest = await downloadManifest(request, env, ctx);
+      const manifest = await downloadManifest(ctx);
       if (!manifest) return fail(503, '下载信息暂不可用，请稍后重试。');
       return new Response(request.method === 'HEAD' ? null : JSON.stringify(manifest), { headers: {
         'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store',
