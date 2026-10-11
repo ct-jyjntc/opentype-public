@@ -410,9 +410,10 @@ kbd {
   color: var(--muted);
   font-size: 11px;
 }
-.history-status svg {
+.history-status > svg {
   margin-left: auto;
 }
+.history-status .delivery-failed { display: inline-flex; align-items: center; color: var(--danger); }
 .warning {
   color: #a5792f;
 }

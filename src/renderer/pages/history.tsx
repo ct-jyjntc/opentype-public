@@ -156,7 +156,7 @@ export function HistoryPage({ notify }: { notify: (text: string) => void }) {
               <div className="history-status">
                 <span>{durationLabel(row.duration)}</span>
                 {typeof parseMeta(row.modeMeta).skill_name === 'string' && <span>{parseMeta(row.modeMeta).skill_name}</span>}
-                {parseMeta(row.modeMeta).input_delivery === 'failed' && <span className="warning">文字已生成 · 待复制</span>}
+                {parseMeta(row.modeMeta).input_delivery === 'failed' && <span className="delivery-failed" role="img" aria-label="文字未插入，可复制文字" title="文字未插入，可复制文字"><Icon name="error" size={14} /></span>}
                 {row.status !== 'completed' && (
                   <span className="warning">
                     {parseMeta(row.modeMeta).recovered_audio
