@@ -28,6 +28,7 @@ export interface TranscribeParams {
 }
 
 export interface ContextEdit {
+  /** Empty object marks a successful structured-context response requiring strict body-only delivery. */
   before?: { original: string; replacement: string }
   after?: { original: string; replacement: string }
 }

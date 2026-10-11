@@ -158,7 +158,7 @@ export async function refineTranscript(rawText: string, params: TranscribeParams
       const object = parsed as Record<string, unknown>
       if (typeof object.text !== 'string' || !object.text.trim()) return failed('refine_failed')
       return { success: true, text: object.text.trim(), rawText,
-        contextEdit: validateContextEdit(object.context_edit, contextBeforeText, contextAfterText) }
+        contextEdit: validateContextEdit(object.context_edit, contextBeforeText, contextAfterText) ?? {} }
     }
     return { success: true, text: text.trim(), rawText }
   } catch { return failed(params.signal?.aborted ? 'cancelled' : 'refine_failed') }
