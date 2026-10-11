@@ -2,9 +2,77 @@
 #include "ClipboardLease.h"
 #include <shlobj.h>
 #include <cstdio>
+#include <optional>
+#include <cstdint>
 
 namespace {
 constexpr int documentLimit = 1000000;
+struct ContextSide { std::wstring original,replacement; };
+struct ContextEdit { std::optional<ContextSide> before,after; };
+void skipJSONSpace(const std::string& input,size_t& at){while(at<input.size()&&(input[at]==' '||input[at]=='\t'||input[at]=='\r'||input[at]=='\n'))at++;}
+int hexDigit(char value){if(value>='0'&&value<='9')return value-'0';if(value>='a'&&value<='f')return value-'a'+10;if(value>='A'&&value<='F')return value-'A'+10;return -1;}
+bool readHex4(const std::string& input,size_t& at,unsigned& value){if(at+4>input.size())return false;value=0;for(int i=0;i<4;i++){int digit=hexDigit(input[at++]);if(digit<0)return false;value=(value<<4)|static_cast<unsigned>(digit);}return true;}
+void appendUTF8(std::string& output,uint32_t point){
+  if(point<=0x7f)output.push_back(static_cast<char>(point));
+  else if(point<=0x7ff){output.push_back(static_cast<char>(0xc0|(point>>6)));output.push_back(static_cast<char>(0x80|(point&0x3f)));}
+  else if(point<=0xffff){output.push_back(static_cast<char>(0xe0|(point>>12)));output.push_back(static_cast<char>(0x80|((point>>6)&0x3f)));output.push_back(static_cast<char>(0x80|(point&0x3f)));}
+  else{output.push_back(static_cast<char>(0xf0|(point>>18)));output.push_back(static_cast<char>(0x80|((point>>12)&0x3f)));output.push_back(static_cast<char>(0x80|((point>>6)&0x3f)));output.push_back(static_cast<char>(0x80|(point&0x3f)));}
+}
+bool parseJSONString(const std::string& input,size_t& at,std::string& output){
+  skipJSONSpace(input,at);if(at>=input.size()||input[at++]!='"')return false;output.clear();
+  while(at<input.size()){
+    unsigned char ch=static_cast<unsigned char>(input[at++]);if(ch=='"')return true;if(ch<0x20)return false;
+    if(ch!='\\'){output.push_back(static_cast<char>(ch));continue;}
+    if(at>=input.size())return false;char escape=input[at++];
+    switch(escape){case '"':output.push_back('"');break;case '\\':output.push_back('\\');break;case '/':output.push_back('/');break;
+      case 'b':output.push_back('\b');break;case 'f':output.push_back('\f');break;case 'n':output.push_back('\n');break;case 'r':output.push_back('\r');break;case 't':output.push_back('\t');break;
+      case 'u':{unsigned first=0;if(!readHex4(input,at,first))return false;uint32_t point=first;
+        if(first>=0xd800&&first<=0xdbff){if(at+2>input.size()||input[at++]!='\\'||input[at++]!='u')return false;unsigned second=0;if(!readHex4(input,at,second)||second<0xdc00||second>0xdfff)return false;point=0x10000+((first-0xd800)<<10)+(second-0xdc00);}
+        else if(first>=0xdc00&&first<=0xdfff)return false;appendUTF8(output,point);break;}
+      default:return false;
+    }
+  }return false;
+}
+bool allowedContextEditCharacter(wchar_t value){
+  switch(static_cast<unsigned>(value)){
+    case 0x3002:case 0xff01:case 0xff1f:case L'.':case L'!':case L'?':case L',':case 0xff0c:case 0x3001:
+    case L';':case 0xff1b:case L':':case 0xff1a:case 0x0009:case 0x000a:case 0x000b:case 0x000c:case 0x000d:case 0x0020:
+    case 0x00a0:case 0x1680:case 0x2028:case 0x2029:case 0x202f:case 0x205f:case 0x3000:case 0xfeff:return true;
+    default:return value>=0x2000&&value<=0x200a;
+  }
+}
+bool validateContextSide(const ContextSide& side){
+  if(side.original.empty()||side.original.size()>8||side.replacement.size()>8||side.original==side.replacement)return false;
+  return std::all_of(side.original.begin(),side.original.end(),allowedContextEditCharacter)&&
+    std::all_of(side.replacement.begin(),side.replacement.end(),allowedContextEditCharacter);
+}
+bool parseContextSide(const std::string& input,size_t& at,ContextSide& side){
+  skipJSONSpace(input,at);if(at>=input.size()||input[at++]!='{')return false;
+  bool original=false,replacement=false;skipJSONSpace(input,at);
+  while(at<input.size()&&input[at]!='}'){
+    std::string key,bytes;if(!parseJSONString(input,at,key))return false;skipJSONSpace(input,at);
+    if(at>=input.size()||input[at++]!=':')return false;if(!parseJSONString(input,at,bytes))return false;
+    std::wstring value;try{value=ot::wide(bytes);}catch(...){return false;}
+    if(key=="original"&&!original){side.original=std::move(value);original=true;}
+    else if(key=="replacement"&&!replacement){side.replacement=std::move(value);replacement=true;}
+    else return false;
+    skipJSONSpace(input,at);if(at<input.size()&&input[at]==','){at++;skipJSONSpace(input,at);continue;}break;
+  }
+  if(at>=input.size()||input[at++]!='}'||!original||!replacement)return false;return validateContextSide(side);
+}
+bool parseContextEdit(const std::string& input,ContextEdit& edit){
+  size_t at=0;skipJSONSpace(input,at);if(at>=input.size()||input[at++]!='{')return false;
+  bool seenBefore=false,seenAfter=false;skipJSONSpace(input,at);
+  while(at<input.size()&&input[at]!='}'){
+    std::string key;if(!parseJSONString(input,at,key))return false;skipJSONSpace(input,at);
+    if(at>=input.size()||input[at++]!=':')return false;
+    if(key=="before"&&!seenBefore){ContextSide side;if(!parseContextSide(input,at,side))return false;edit.before=std::move(side);seenBefore=true;}
+    else if(key=="after"&&!seenAfter){ContextSide side;if(!parseContextSide(input,at,side))return false;edit.after=std::move(side);seenAfter=true;}
+    else return false;
+    skipJSONSpace(input,at);if(at<input.size()&&input[at]==','){at++;skipJSONSpace(input,at);continue;}break;
+  }
+  if(at>=input.size()||input[at++]!='}'||(!seenBefore&&!seenAfter))return false;skipJSONSpace(input,at);return at==input.size();
+}
 std::wstring bstr(BSTR value) { return value ? std::wstring(value,SysStringLen(value)) : L""; }
 std::wstring rangeText(IUIAutomationTextRange* range,int maximum=documentLimit+1) {
   BSTR raw=nullptr;if(!range||FAILED(range->GetText(maximum,&raw)))throw std::runtime_error("injection_target_unavailable");
@@ -102,7 +170,11 @@ struct Target {
   ComPtr<IUIAutomationElement> element;
   Snapshot original;
   std::wstring expected,inserted;
+  std::wstring observationBase;
+  int observationStart=0,observationAfterPadding=0;
+  bool hasObservationBase=false;
   std::vector<std::wstring> urls;
+  bool webRedacted=false;
   bool submitted=false,verified=false;
   ULONGLONG observation=0;
   // field: the focused control exposed a writable UI Automation text pattern,
@@ -118,8 +190,9 @@ bool focused(const Target& target) {
   if(!IsWindow(target.window)||pid!=target.pid||rootWindow(GetForegroundWindow())!=target.window||!ot::inputDesktopAvailable())return false;
   if(!target.field)return true;
   ComPtr<IUIAutomationElement> current;BOOL same=FALSE;auto* api=ot::automation();
-  return api&&SUCCEEDED(api->GetFocusedElement(&current))&&current&&SUCCEEDED(api->CompareElements(current.Get(),target.element.Get(),&same))&&same
-    && webURLs(target.element.Get())==target.urls;
+  if(!api||FAILED(api->GetFocusedElement(&current))||!current||FAILED(api->CompareElements(current.Get(),target.element.Get(),&same))||!same)return false;
+  bool hidden=false;auto urls=webURLs(target.element.Get(),&hidden);bool redacted=hidden||(browser(target.pid)&&urls.empty());
+  return urls==target.urls&&redacted==target.webRedacted;
 }
 std::shared_ptr<Target> targetFor(const std::string& token) {
   auto found=targets.find(token);if(found==targets.end())throw std::runtime_error("injection_target_closed");return found->second;
@@ -172,7 +245,7 @@ std::string capture(bool allowReadOnly,bool keepTarget=true) {
   if(pid==GetCurrentProcessId()&&!readable)return base+",\"reason\":\"injection_target_unavailable\"}";
   if(keepTarget&&targets.size()<16){
     auto target=std::make_shared<Target>();target->window=window;target->pid=pid;target->field=readable;
-    if(readable){target->element=element;target->original=value;target->urls=urls;}
+    if(readable){target->element=element;target->original=value;target->urls=urls;target->webRedacted=redacted;}
     auto token=ot::guid();targets[token]=target;base+=",\"token\":"+ot::quote(token);
   }
   return base+'}';
@@ -279,6 +352,115 @@ std::string commit(Target& target,const std::wstring& text,const std::string& ht
 }
 // A combo shortcut may still be held when the text is ready; typed or pasted
 // keys would then arrive as shortcuts. Wait briefly off the UI thread.
+bool strictSnapshotMatches(const Target& target,const std::wstring& value,int start,int end){
+  if(!target.field||!focused(target))return false;
+  try{auto current=read(target.element.Get());return current.writable&&current.value==value&&current.start==start&&current.end==end;}
+  catch(...){return false;}
+}
+std::string contextResponse(bool submitted,bool uncertain,const char* method,bool applied,const char* contextReason,const char* failureReason=nullptr){
+  std::vector<std::pair<std::string,std::string>> fields{{"submitted",submitted?"true":"false"}};
+  if(uncertain)fields.push_back({"uncertain","true"});
+  if(method&&*method)fields.push_back({"method",ot::quote(std::string(method))});
+  if(!uncertain)fields.push_back({"contextEditApplied",applied?"true":"false"});
+  if(contextReason&&*contextReason)fields.push_back({"contextEditReason",ot::quote(std::string(contextReason))});
+  if(failureReason&&*failureReason)fields.push_back({"reason",ot::quote(std::string(failureReason))});
+  std::string out="{";for(const auto& field:fields){if(out.size()>1)out+=',';out+=ot::quote(field.first)+':'+field.second;}return out+'}';
+}
+std::string commitContextEdit(Target& target,const std::wstring& text,const std::string& editJSON){
+  if(target.submitted)return contextResponse(true,true,"",false,"unknown","injection_already_sent");
+  if(!target.field||!target.window||!target.original.writable)throw std::runtime_error("injection_target_unavailable");
+  if(text.empty())return contextResponse(false,false,"",false,"invalid","injection_empty_text");
+  const int originalStart=target.original.start,originalEnd=target.original.end;
+  if(!focused(target)||!strictSnapshotMatches(target,target.original.value,originalStart,originalEnd))
+    return contextResponse(false,false,"",false,"stale","injection_target_changed");
+  ContextEdit edit;const bool validEdit=parseContextEdit(editJSON,edit);
+  const bool requestedEdit=validEdit&&(edit.before.has_value()||edit.after.has_value());
+  const bool eligibleEdit=requestedEdit&&!target.webRedacted;
+  int expandedStart=originalStart,expandedEnd=originalEnd;
+  std::wstring payload=text;bool applied=false;const char* fallbackReason=!validEdit?"invalid":(target.webRedacted?"unsupported":"body_only");
+  ComPtr<IUIAutomationTextRange> originalSelection;
+  if(eligibleEdit){
+    const int beforeLength=edit.before?static_cast<int>(edit.before->original.size()):0;
+    const int afterLength=edit.after?static_cast<int>(edit.after->original.size()):0;
+    bool neighbors=originalStart>=beforeLength&&originalEnd+afterLength<=static_cast<int>(target.original.value.size());
+    if(neighbors&&edit.before)neighbors=target.original.value.compare(originalStart-beforeLength,beforeLength,edit.before->original)==0;
+    if(neighbors&&edit.after)neighbors=target.original.value.compare(originalEnd,afterLength,edit.after->original)==0;
+    if(neighbors){
+      expandedStart=originalStart-beforeLength;expandedEnd=originalEnd+afterLength;
+      ComPtr<IUIAutomationTextRange> expanded;
+      if(FAILED(target.original.selection->Clone(&originalSelection))||FAILED(target.original.selection->Clone(&expanded)))neighbors=false;
+      int moved=0;
+      if(neighbors&&beforeLength&&(FAILED(expanded->MoveEndpointByUnit(TextPatternRangeEndpoint_Start,TextUnit_Character,-beforeLength,&moved))||moved!=-beforeLength))neighbors=false;
+      moved=0;
+      if(neighbors&&afterLength&&(FAILED(expanded->MoveEndpointByUnit(TextPatternRangeEndpoint_End,TextUnit_Character,afterLength,&moved))||moved!=afterLength))neighbors=false;
+      if(neighbors&&rangeText(expanded.Get(),32)!=target.original.value.substr(expandedStart,expandedEnd-expandedStart))neighbors=false;
+      if(neighbors&&strictSnapshotMatches(target,target.original.value,originalStart,originalEnd)){
+        if(SUCCEEDED(expanded->Select())&&strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)){
+          payload=(edit.before?edit.before->replacement:L"")+text+(edit.after?edit.after->replacement:L"");applied=true;
+        }else if(strictSnapshotMatches(target,target.original.value,originalStart,originalEnd)){
+          expandedStart=originalStart;expandedEnd=originalEnd;fallbackReason="unsupported";
+        }else if(strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)&&originalSelection){
+          originalSelection->Select();return contextResponse(false,false,"",false,"stale","injection_target_changed");
+        }else return contextResponse(false,false,"",false,"stale","injection_target_changed");
+      }else if(!neighbors)fallbackReason="invalid";
+      else return contextResponse(false,false,"",false,"stale","injection_target_changed");
+    }else fallbackReason="invalid";
+  }else if(validEdit&&!requestedEdit)fallbackReason="body_only";
+  // Expansion preparation can update these bounds before a later clone or
+  // range operation fails. Body-only fallback must retain the captured range.
+  if(!applied){expandedStart=originalStart;expandedEnd=originalEnd;}
+  if(!applied&&!strictSnapshotMatches(target,target.original.value,originalStart,originalEnd))
+    return contextResponse(false,false,"",false,"stale","injection_target_changed");
+  if(modifiersHeld()){
+    if(applied&&originalSelection&&strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))originalSelection->Select();
+    return contextResponse(false,false,"",false,fallbackReason,"injection_keys_held");
+  }
+  const std::wstring prefix=target.original.value.substr(0,expandedStart),suffix=target.original.value.substr(expandedEnd);
+  const std::wstring expected=prefix+payload+suffix;
+  const std::wstring beforeReplacement=applied&&edit.before?edit.before->replacement:L"";
+  const std::wstring afterReplacement=applied&&edit.after?edit.after->replacement:L"";
+  target.expected=expected;target.inserted=text;target.observationBase=prefix+beforeReplacement+afterReplacement+suffix;
+  target.observationStart=static_cast<int>(prefix.size()+beforeReplacement.size());
+  target.observationAfterPadding=static_cast<int>(afterReplacement.size());target.hasObservationBase=true;
+  if(clipboardLease){clipboardLease->restore();if(!clipboardLease->waitForExit(4000)){
+      if(strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)&&originalSelection)originalSelection->Select();
+      return contextResponse(false,false,"",false,fallbackReason,"injection_clipboard_unavailable");
+    }clipboardLease.reset();}
+  DWORD sequence=0;
+  try{
+    if(!strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))throw std::runtime_error("injection_target_changed");
+    if(!payload.empty())clipboardLease=std::make_unique<otclip::Lease>(payload);
+    if(!strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))throw std::runtime_error("injection_target_changed");
+    if(clipboardLease)sequence=clipboardLease->apply();
+    if(!strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))throw std::runtime_error("injection_target_changed");
+    if(clipboardLease&&(!clipboardLease->active()||GetClipboardSequenceNumber()!=sequence))throw std::runtime_error("injection_clipboard_changed");
+    if(modifiersHeld())throw std::runtime_error("injection_keys_held");
+  }catch(const std::exception& error){
+    restoreClipboard();target.expected.clear();target.inserted.clear();target.hasObservationBase=false;
+    if(strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)&&originalSelection)originalSelection->Select();
+    return contextResponse(false,false,"",false,fallbackReason,error.what());
+  }catch(...){
+    restoreClipboard();target.expected.clear();target.inserted.clear();target.hasObservationBase=false;
+    if(strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)&&originalSelection)originalSelection->Select();
+    return contextResponse(false,false,"",false,fallbackReason,"injection_failed");
+  }
+  target.submitted=true;
+  INPUT keys[4]={};WORD codes[4]={VK_CONTROL,'V','V',VK_CONTROL};
+  for(UINT i=0;i<4;i++){keys[i].type=INPUT_KEYBOARD;keys[i].ki.wVk=codes[i];keys[i].ki.dwExtraInfo=ot::inputMarker;keys[i].ki.dwFlags=i>=2?KEYEVENTF_KEYUP:0;}
+  UINT sent=SendInput(4,keys,sizeof(INPUT));
+  if(sent<4){
+    // SendInput inserts a prefix of the event array. Release only keys whose
+    // corresponding key-down was inserted by this call.
+    INPUT release[2]={};UINT releaseCount=0;
+    if(sent>=2&&sent<3){release[releaseCount].type=INPUT_KEYBOARD;release[releaseCount].ki.wVk='V';releaseCount++;}
+    if(sent>=1&&sent<4){release[releaseCount].type=INPUT_KEYBOARD;release[releaseCount].ki.wVk=VK_CONTROL;releaseCount++;}
+    for(UINT i=0;i<releaseCount;i++){release[i].ki.dwFlags=KEYEVENTF_KEYUP;release[i].ki.dwExtraInfo=ot::inputMarker;}
+    if(releaseCount)SendInput(releaseCount,release,sizeof(INPUT));
+  }
+  if(clipboardLease)clipboardLease->posted();
+  if(sent<4)return contextResponse(true,true,"windows_clipboard",false,"uncertain");
+  return contextResponse(true,false,"windows_clipboard",applied,fallbackReason);
+}
 void waitForModifiers(){for(int waited=0;waited<600&&modifiersHeld();waited+=15)Sleep(15);if(!modifiersHeld())Sleep(30);}
 template<class F> char* respond(F action){try{return ot::result(ot::system(std::move(action)));}catch(const std::exception& error){return ot::result(ot::failure(error.what()));}catch(...){return ot::result(ot::failure("injection_bridge_error"));}}
 }
@@ -296,6 +478,10 @@ OT_EXPORT char* prepareInputTarget(const char* token){std::string id=token?token
   return std::string("{\"ok\":true}");});}
 OT_EXPORT char* inputTargetReady(const char* token){std::string id=token?token:"";return respond([id]{auto target=targetFor(id);if(!focused(*target))throw std::runtime_error("injection_focus_pending");unchanged(*target,true);return std::string("{\"ok\":true}");});}
 OT_EXPORT char* commitInputTarget(const char* token,const char* text){try{std::string id=token?token:"";auto value=ot::wide(text);waitForModifiers();return respond([id,value]{return commit(*targetFor(id),value);});}catch(...){return ot::result(ot::failure("invalid_utf8"));}}
+OT_EXPORT char* commitInputTargetWithContextEdit(const char* token,const char* text,const char* editJSON){
+  try{std::string id=token?token:"",edit=editJSON?editJSON:"";auto value=ot::wide(text);waitForModifiers();return respond([id,value,edit]{return commitContextEdit(*targetFor(id),value,edit);});}
+  catch(...){return ot::result(ot::failure("invalid_utf8"));}
+}
 OT_EXPORT char* verifyInputTarget(const char* token){std::string id=token?token:"";return respond([id]{auto target=targetFor(id);if(!target->submitted)throw std::runtime_error("injection_failed");
   // Typed or pasted into an app without a readable field: nothing to check.
   if(!target->field)return std::string("{\"status\":\"unverified\",\"blind\":true}");
@@ -315,21 +501,27 @@ OT_EXPORT char* readInputObservation(const char* token){std::string id=token?tok
   if(GetForegroundWindow()!=target->window)return std::string("{\"active\":false,\"reason\":\"app_inactive\"}");
   if(webURLs(target->element.Get())!=target->urls)return std::string("{\"active\":false,\"reason\":\"document_changed\"}");
   if(!focused(*target))return std::string("{\"active\":false,\"reason\":\"field_unfocused\"}");
-  auto current=read(target->element.Get());auto prefix=target->original.value.substr(0,target->original.start),suffix=target->original.value.substr(target->original.end);
+  auto current=read(target->element.Get());const std::wstring& baseline=target->hasObservationBase?target->observationBase:target->original.value;
+  int baseStart=target->hasObservationBase?target->observationStart:target->original.start;
+  int baseEnd=target->hasObservationBase?target->observationStart:target->original.end;
+  auto prefix=baseline.substr(0,baseStart),suffix=baseline.substr(baseEnd);
   if(current.value.size()<prefix.size()+suffix.size()||current.value.compare(0,prefix.size(),prefix)!=0||current.value.compare(current.value.size()-suffix.size(),suffix.size(),suffix)!=0)return std::string("{\"active\":false}");
   size_t length=current.value.size()-prefix.size()-suffix.size();
-  if(length>100000||current.start<static_cast<int>(prefix.size())||current.end>static_cast<int>(prefix.size()+length))return std::string("{\"active\":false}");
+  int bodyEnd=static_cast<int>(prefix.size()+length);
+  bool caretAfterBody=current.start==current.end&&current.start<=bodyEnd+target->observationAfterPadding;
+  if(length>100000||current.start<static_cast<int>(prefix.size())||current.start>bodyEnd+target->observationAfterPadding||
+     (current.end>bodyEnd&&!caretAfterBody)||current.end<current.start)return std::string("{\"active\":false}");
   return ot::object({{"active","true"},{"text",ot::quote(current.value.substr(prefix.size(),length))}});});}
 OT_EXPORT char* getSelectedText(){try{return ot::result(ot::system([]{ComPtr<IUIAutomationElement> field;auto* api=ot::automation();
   if(!api||FAILED(api->GetFocusedElement(&field)))return std::string();auto value=read(field.Get());return ot::utf8(value.value.substr(value.start,value.end-value.start));}));}catch(...){return nullptr;}}
 OT_EXPORT int insertRichText(const char* html,const char* text){try{auto value=ot::wide(text);std::string markup=html?html:"";return ot::system([value,markup]{
   auto* api=ot::automation();ComPtr<IUIAutomationElement> field;if(!api||FAILED(api->GetFocusedElement(&field)))return -1;
-  Target target;target.window=GetForegroundWindow();GetWindowThreadProcessId(target.window,&target.pid);target.element=field;target.field=true;target.original=read(field.Get());target.urls=webURLs(field.Get());commit(target,value,markup);return 0;
+  Target target;target.window=GetForegroundWindow();GetWindowThreadProcessId(target.window,&target.pid);target.element=field;target.field=true;target.original=read(field.Get());bool hidden=false;target.urls=webURLs(field.Get(),&hidden);target.webRedacted=hidden||(browser(target.pid)&&target.urls.empty());commit(target,value,markup);return 0;
 });}catch(...){return -1;}}
 OT_EXPORT int insertText(const char* text){return insertRichText("",text);}
 OT_EXPORT int deleteBackward(int count){if(count<=0||count>100000)return -1;try{return ot::system([count]{
   auto* api=ot::automation();ComPtr<IUIAutomationElement> field;if(!api||FAILED(api->GetFocusedElement(&field)))return -1;
-  Target target;target.window=GetForegroundWindow();GetWindowThreadProcessId(target.window,&target.pid);target.element=field;target.field=true;target.original=read(field.Get());target.urls=webURLs(field.Get());
+  Target target;target.window=GetForegroundWindow();GetWindowThreadProcessId(target.window,&target.pid);target.element=field;target.field=true;target.original=read(field.Get());bool hidden=false;target.urls=webURLs(field.Get(),&hidden);target.webRedacted=hidden||(browser(target.pid)&&target.urls.empty());
   if(target.original.start==target.original.end){int moved=0;if(FAILED(target.original.selection->MoveEndpointByUnit(TextPatternRangeEndpoint_Start,TextUnit_Character,-count,&moved))||FAILED(target.original.selection->Select()))return -1;target.original=read(field.Get());}
   if(target.original.start==target.original.end)return 0;commit(target,L"");return 0;
 });}catch(...){return -1;}}

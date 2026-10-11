@@ -19,6 +19,16 @@ import Carbon.HIToolbox
 /// writes run on `accessibilityQueue` and only read immutable configuration.
 final class TextInjector: @unchecked Sendable {
 
+    struct StrictInputTarget: @unchecked Sendable {
+        let element: AXUIElement
+        let processID: pid_t
+        let value: String
+        let range: CFRange
+        let window: AXUIElement?
+        let documentURLs: [String]
+        let webRedacted: Bool
+    }
+
     // MARK: - Constants
 
     /// Delay after simulating Cmd+V before restoring the clipboard, when
@@ -77,6 +87,7 @@ final class TextInjector: @unchecked Sendable {
         let text: String
         let preserveClipboard: Bool
         let targetPID: pid_t?
+        let strictTarget: StrictInputTarget?
         let report: DeliveryReport?
     }
 
@@ -194,6 +205,14 @@ final class TextInjector: @unchecked Sendable {
     /// delivery path as ordinary dictation without allowing a focus change to
     /// redirect the edit.
     func inject(text: String, preserveClipboard: Bool, expectedProcessID: pid_t, report: DeliveryReport? = nil) {
+        enqueueExpectedTargetInjection(text: text, preserveClipboard: preserveClipboard, expectedProcessID: expectedProcessID, strictTarget: nil, report: report)
+    }
+
+    func inject(text: String, preserveClipboard: Bool, strictTarget: StrictInputTarget, report: DeliveryReport? = nil) {
+        enqueueExpectedTargetInjection(text: text, preserveClipboard: preserveClipboard, expectedProcessID: strictTarget.processID, strictTarget: strictTarget, report: report)
+    }
+
+    private func enqueueExpectedTargetInjection(text: String, preserveClipboard: Bool, expectedProcessID: pid_t, strictTarget: StrictInputTarget?, report: DeliveryReport?) {
         guard !text.isEmpty else { report?(.failed("injection_failed")); return }
 
         let enqueue = { @Sendable [self] in
@@ -203,10 +222,15 @@ final class TextInjector: @unchecked Sendable {
                 report?(.failed(mismatchReason(queued: expectedProcessID, current: currentPID)))
                 return
             }
+            if let strictTarget, !matches(strictTarget) {
+                report?(.failed("injection_target_changed"))
+                return
+            }
             enqueueInjection(
                 text: text,
                 preserveClipboard: preserveClipboard,
                 targetPID: expectedProcessID,
+                strictTarget: strictTarget,
                 report: report
             )
         }
@@ -218,6 +242,7 @@ final class TextInjector: @unchecked Sendable {
         text: String,
         preserveClipboard: Bool,
         targetPID: pid_t?,
+        strictTarget: StrictInputTarget? = nil,
         report: DeliveryReport?
     ) {
         let interval = PerformanceTrace.begin("TextDeliveryQueueAndDispatch")
@@ -230,6 +255,7 @@ final class TextInjector: @unchecked Sendable {
                 text: text,
                 preserveClipboard: preserveClipboard,
                 targetPID: targetPID,
+                strictTarget: strictTarget,
                 report: report,
                 completion: complete
             )
@@ -256,8 +282,47 @@ final class TextInjector: @unchecked Sendable {
 
     private static let accessibilityQueue = DispatchQueue(label: "com.vocamac.text-accessibility", qos: .userInitiated)
 
+    private func matches(_ target: StrictInputTarget) -> Bool {
+        guard frontmostPIDProvider() == target.processID else { return false }
+        var focusedRef: CFTypeRef?
+        let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, 0.1)
+        AXUIElementSetMessagingTimeout(target.element, 0.1)
+        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+              let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return false }
+        // swiftlint:disable force_cast
+        let focused = focusedRef as! AXUIElement
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(focused, &pid) == .success, pid == target.processID, CFEqual(focused, target.element) else { return false }
+        // swiftlint:enable force_cast
+        var rawWindow: CFTypeRef?
+        let windowError = AXUIElementCopyAttributeValue(target.element, kAXWindowAttribute as CFString, &rawWindow)
+        let currentWindow = windowError == .success ? (rawWindow.flatMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }) : nil
+        guard let expectedWindow = target.window, let currentWindow, CFEqual(expectedWindow, currentWindow),
+              let currentValue = try? accessibilityString(target.element, kAXValueAttribute as String), currentValue == target.value,
+              let currentRange = accessibilityRange(target.element), currentRange.location == target.range.location,
+              currentRange.length == target.range.length else { return false }
+        let web = targetWebContext(target.element, maximumDepth: 16, messagingTimeout: 0.02)
+        return web.urls == target.documentURLs && web.redacted == target.webRedacted
+    }
+
+    private func accessibilityString(_ element: AXUIElement, _ attribute: String) throws -> String {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let string = value as? String else { throw SnapshotError.changed }
+        return string
+    }
+
+    private func accessibilityRange(_ element: AXUIElement) -> CFRange? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        return AXValueGetValue(value as! AXValue, .cfRange, &range) ? range : nil
+    }
+
     /// Clipboard operations remain on main; only cross-process AX work runs on the worker.
-    private func performInjection(text: String, preserveClipboard: Bool, targetPID: pid_t?, report: DeliveryReport?, completion: @escaping @Sendable () -> Void) {
+    private func performInjection(text: String, preserveClipboard: Bool, targetPID: pid_t?, strictTarget: StrictInputTarget? = nil, report: DeliveryReport?, completion: @escaping @Sendable () -> Void) {
         let trusted = accessibilityTrustedOverride ?? AXIsProcessTrusted()
         guard trusted else {
             // Without Accessibility neither insertion path works. Leave the
@@ -276,6 +341,11 @@ final class TextInjector: @unchecked Sendable {
             completion()
             return
         }
+        if let strictTarget, !matches(strictTarget) {
+            report?(.failed("injection_target_changed"))
+            completion()
+            return
+        }
         let deliverFallback = { @Sendable [self] (result: AccessibilityInsertion) in
             if result == .inserted {
                 PerformanceTrace.event("AccessibilityTextInserted")
@@ -287,15 +357,15 @@ final class TextInjector: @unchecked Sendable {
                 completion()
             } else {
                 let currentPID = frontmostPIDProvider()
-                if samePasteTarget(targetPID, currentPID) {
+                if samePasteTarget(targetPID, currentPID), strictTarget.map(matches) ?? true {
                     processClipboardInjection(
-                        ClipboardInjectionRequest(text: text, preserveClipboard: preserveClipboard, targetPID: targetPID, report: report),
+                        ClipboardInjectionRequest(text: text, preserveClipboard: preserveClipboard, targetPID: targetPID, strictTarget: strictTarget, report: report),
                         completion: completion
                     )
                 } else {
                     // Focus changed or the destination app disappeared. Do not paste.
                     reportPasteTargetMismatch(queued: targetPID, current: currentPID)
-                    report?(.failed(mismatchReason(queued: targetPID, current: currentPID)))
+                    report?(.failed(strictTarget == nil ? mismatchReason(queued: targetPID, current: currentPID) : "injection_target_changed"))
                     completion()
                 }
             }
@@ -314,7 +384,7 @@ final class TextInjector: @unchecked Sendable {
             let interval = PerformanceTrace.begin("TextAccessibilityQueryAndWrite")
             let inserted = accessibilityWorkerOverride.map {
                 $0(text) ? AccessibilityInsertion.inserted : .unavailable
-            } ?? injectViaAccessibility(text: text, targetPID: targetPID)
+            } ?? injectViaAccessibility(text: text, targetPID: targetPID, strictTarget: strictTarget)
             PerformanceTrace.end(interval)
             deliverFallback(inserted)
             return
@@ -322,7 +392,7 @@ final class TextInjector: @unchecked Sendable {
         Self.accessibilityQueue.async { [self] in
             let interval = PerformanceTrace.begin("TextAccessibilityQueryAndWrite")
             let inserted = accessibilityWorkerOverride.map { $0(text) ? AccessibilityInsertion.inserted : .unavailable }
-                ?? injectViaAccessibility(text: text, targetPID: targetPID)
+                ?? injectViaAccessibility(text: text, targetPID: targetPID, strictTarget: strictTarget)
             PerformanceTrace.end(interval)
             DispatchQueue.main.async { deliverFallback(inserted) }
         }
@@ -354,7 +424,7 @@ final class TextInjector: @unchecked Sendable {
     ///            unsupported role, cannot take the write, or rejected it;
     ///            `.uncertain` if the write timed out and may still land.
     @discardableResult
-    private func injectViaAccessibility(text: String, targetPID: pid_t?) -> AccessibilityInsertion {
+    private func injectViaAccessibility(text: String, targetPID: pid_t?, strictTarget: StrictInputTarget? = nil) -> AccessibilityInsertion {
         let systemWide = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(systemWide, 0.1)
         var focusedRef: CFTypeRef?
@@ -364,24 +434,29 @@ final class TextInjector: @unchecked Sendable {
             kAXFocusedUIElementAttribute as CFString,
             &focusedRef
         )
-        guard fetchResult == .success, let focusedRef else {
-            VocaLogger.debug(.textInjector, "AX: no focused element (\(fetchResult.rawValue))")
-            return .unavailable
+        if strictTarget == nil {
+            guard fetchResult == .success, let focusedRef else {
+                VocaLogger.debug(.textInjector, "AX: no focused element (\(fetchResult.rawValue))")
+                return .unavailable
+            }
         }
 
         // The returned CFTypeRef must be an AXUIElement.
-        guard CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
+        guard let element: AXUIElement = {
+            if let strictTarget { return strictTarget.element }
+            guard let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return nil }
+            // swiftlint:disable force_cast
+            return focusedRef as! AXUIElement
+            // swiftlint:enable force_cast
+        }() else {
             VocaLogger.debug(.textInjector, "AX: focused element is not an AXUIElement")
             return .unavailable
         }
-
-        // swiftlint:disable force_cast
-        let element = focusedRef as! AXUIElement
         var elementPID: pid_t = 0
         guard AXUIElementGetPid(element, &elementPID) == .success,
               elementPID == targetPID || Self.isLauncherPanelOwner(elementPID) else { return .unavailable }
         AXUIElementSetMessagingTimeout(element, 0.1)
-        // swiftlint:enable force_cast
+        if let strictTarget, !matches(strictTarget) { return .unavailable }
 
         // Gate on element role. Only single-line input fields reliably handle
         // a direct kAXSelectedTextAttribute write as "insert text at cursor".
@@ -405,6 +480,7 @@ final class TextInjector: @unchecked Sendable {
             VocaLogger.debug(.textInjector, "AX: selected text not settable (role: \(role)) — using Cmd+V")
             return .unavailable
         }
+        if let strictTarget, !matches(strictTarget) { return .unavailable }
 
         // A timed-out write may still be applied by the target. It must never
         // trigger an automatic second insertion via Cmd+V.
@@ -420,7 +496,7 @@ final class TextInjector: @unchecked Sendable {
         }
 
         VocaLogger.debug(.textInjector, "AX: kAXSelectedTextAttribute write failed (\(setResult.rawValue)) — element may be read-only")
-        return setResult == .cannotComplete ? .uncertain : .unavailable
+        return setResult == .cannotComplete || strictTarget != nil ? .uncertain : .unavailable
     }
 
     /// Whether the focused field belongs to a menu bar app's panel, such as
@@ -454,6 +530,10 @@ final class TextInjector: @unchecked Sendable {
                     request.report?(.failed(mismatchReason(queued: request.targetPID, current: currentPID)))
                     return
                 }
+                if let strictTarget = request.strictTarget, !matches(strictTarget) {
+                    request.report?(.failed("injection_target_changed"))
+                    return
+                }
                 var snapshot = request.preserveClipboard ? try await captureStableSnapshot(pasteboard) : nil
                 // `writeTranscribedText` clears the pasteboard before it writes,
                 // so a failed write has already taken the user's clipboard away.
@@ -475,18 +555,34 @@ final class TextInjector: @unchecked Sendable {
                 // Promise the text instead of writing it, so the target's read
                 // says when the paste has landed and the restore can follow.
                 var receipt = request.preserveClipboard ? PasteReceipt(text: request.text) : nil
+                if let strictTarget = request.strictTarget, !matches(strictTarget) {
+                    request.report?(.failed("injection_target_changed"))
+                    return
+                }
                 if case .failed(let generation) = writeTranscribedText(request.text, to: pasteboard, receipt: receipt) {
                     abandonAfterFailedWrite(clearedGeneration: generation)
                     return
                 }
                 var expectedChangeCount = pasteboard.changeCount
                 try await Task.sleep(nanoseconds: UInt64(prePasteDelay * 1_000_000_000))
+                if let strictTarget = request.strictTarget, !matches(strictTarget) {
+                    if request.preserveClipboard, pasteboard.changeCount == expectedChangeCount {
+                        if let snapshot { restoreSnapshot(snapshot, to: pasteboard) }
+                        else { pasteboard.clearContents() }
+                    }
+                    request.report?(.failed("injection_target_changed"))
+                    return
+                }
                 if pasteboard.changeCount != expectedChangeCount {
                     // The snapshot is reassigned first, so a failure here puts
                     // back the clipboard that replaced the original, not the
                     // original itself.
                     snapshot = request.preserveClipboard ? try await captureStableSnapshot(pasteboard) : nil
                     receipt = request.preserveClipboard ? PasteReceipt(text: request.text) : nil
+                    if let strictTarget = request.strictTarget, !matches(strictTarget) {
+                        request.report?(.failed("injection_target_changed"))
+                        return
+                    }
                     if case .failed(let generation) = writeTranscribedText(request.text, to: pasteboard, receipt: receipt) {
                         abandonAfterFailedWrite(clearedGeneration: generation)
                         return
@@ -501,6 +597,14 @@ final class TextInjector: @unchecked Sendable {
                     }
                     reportPasteTargetMismatch(queued: request.targetPID, current: pidBeforePaste)
                     request.report?(.failed(mismatchReason(queued: request.targetPID, current: pidBeforePaste)))
+                    return
+                }
+                if let strictTarget = request.strictTarget, !matches(strictTarget) {
+                    if request.preserveClipboard, pasteboard.changeCount == expectedChangeCount {
+                        if let snapshot { restoreSnapshot(snapshot, to: pasteboard) }
+                        else { pasteboard.clearContents() }
+                    }
+                    request.report?(.failed("injection_target_changed"))
                     return
                 }
                 receipt?.markPastePosted()

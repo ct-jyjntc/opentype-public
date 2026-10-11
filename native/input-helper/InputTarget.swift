@@ -26,6 +26,47 @@ private func targetRange(_ element: AXUIElement) -> CFRange? {
     var range = CFRange()
     return AXValueGetValue(value as! AXValue, .cfRange, &range) ? range : nil
 }
+private func targetRangeValue(_ range: CFRange) -> AXValue? {
+    var value = range
+    return withUnsafePointer(to: &value) { AXValueCreate(.cfRange, UnsafeRawPointer($0)) }
+}
+private struct ContextEditSide {
+    let original: String
+    let replacement: String
+}
+private struct ContextEdit {
+    let before: ContextEditSide?
+    let after: ContextEditSide?
+}
+private func isContextEditCharacter(_ scalar: UnicodeScalar) -> Bool {
+    switch scalar.value {
+    case 0x3002, 0xFF01, 0xFF1F, 0x2E, 0x21, 0x3F, 0x2C, 0xFF0C, 0x3001,
+         0x3B, 0xFF1B, 0x3A, 0xFF1A, 0x9, 0xA, 0xB, 0xC, 0xD, 0x20,
+         0xA0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF:
+        return true
+    case 0x2000...0x200A:
+        return true
+    default:
+        return false
+    }
+}
+private func contextEditSide(_ value: Any?) -> ContextEditSide? {
+    guard let value = value as? [String: Any], let original = value["original"] as? String,
+          let replacement = value["replacement"] as? String,
+          original != replacement, !original.isEmpty,
+          (original as NSString).length <= 8, (replacement as NSString).length <= 8,
+          original.unicodeScalars.allSatisfy(isContextEditCharacter),
+          replacement.unicodeScalars.allSatisfy(isContextEditCharacter) else { return nil }
+    return ContextEditSide(original: original, replacement: replacement)
+}
+private func parseContextEdit(_ json: String) -> ContextEdit? {
+    guard let data = json.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data),
+          let dictionary = object as? [String: Any],
+          Set(dictionary.keys).isSubset(of: ["before", "after"]) else { return nil }
+    if dictionary["before"] != nil, contextEditSide(dictionary["before"]) == nil { return nil }
+    if dictionary["after"] != nil, contextEditSide(dictionary["after"]) == nil { return nil }
+    return ContextEdit(before: dictionary["before"].flatMap(contextEditSide), after: dictionary["after"].flatMap(contextEditSide))
+}
 private func targetJSON(_ value: [String: Any]) -> UnsafeMutablePointer<CChar>? {
     guard let data = try? JSONSerialization.data(withJSONObject: value), let string = String(data: data, encoding: .utf8) else { return strdup("{}") }
     return strdup(string)
@@ -92,6 +133,7 @@ private func addFocusDiagnostics(_ focus: FocusResult, to data: inout [String: A
     if focus.forcedAX { data["axForced"] = true }
 }
 private func focusAttribute(on element: AXUIElement) -> (element: AXUIElement?, error: AXError) {
+    AXUIElementSetMessagingTimeout(element, 0.1)
     var value: CFTypeRef?
     let error = AXUIElementCopyAttributeValue(element, kAXFocusedUIElementAttribute as CFString, &value)
     return (error == .success ? targetElement(value) : nil, error)
@@ -164,6 +206,9 @@ private final class InputTarget {
     let range: CFRange?
     var expected: String?
     var insertedText: String?
+    var observationBaseValue: String?
+    var observationBaseRange: CFRange?
+    var observationAfterPadding = 0
     var submitted = false
     var verified = false
     var observingSince: TimeInterval?
@@ -219,10 +264,11 @@ private func selectedTargetText(_ element: AXUIElement) -> String? {
 }
 // Include ancestor document URLs (such as an iframe's parent), so a domain
 // restriction on the containing page cannot be bypassed by an embedded editor.
-private func targetWebContext(_ element: AXUIElement) -> (urls: [String], redacted: Bool) {
+func targetWebContext(_ element: AXUIElement, maximumDepth: Int = 64, messagingTimeout: Float? = nil) -> (urls: [String], redacted: Bool) {
     var current: AXUIElement? = element, urls: [String] = [], web = false
-    for _ in 0..<64 {
+    for _ in 0..<maximumDepth {
         guard let node = current else { return (urls, web && urls.isEmpty) }
+        if let messagingTimeout { AXUIElementSetMessagingTimeout(node, messagingTimeout) }
         let role = targetAttr(node, kAXRoleAttribute as String) as? String ?? ""
         if role == "AXWebArea" {
             web = true
@@ -359,6 +405,117 @@ private func commitInputTargetOnMain(_ tokenPtr: UnsafePointer<CChar>?, _ textPt
     return nil
 }
 
+private enum ContextPreparation {
+    case ready(ContextInjection)
+    case refused(String)
+}
+private struct ContextInjection {
+    let strictTarget: TextInjector.StrictInputTarget
+    let payload: String
+    let applied: Bool
+    let originalRange: CFRange
+    let reason: String?
+}
+
+private func contextFieldMatches(_ target: InputTarget, value: String) -> Bool {
+    guard target.ready() == nil, let element = target.element else { return false }
+    AXUIElementSetMessagingTimeout(element, 0.1)
+    let currentWindow = targetElement(targetAttr(element, kAXWindowAttribute as String))
+    let currentWeb = targetWebContext(element, maximumDepth: 16, messagingTimeout: 0.02)
+    guard let expectedWindow = target.window, let currentWindow, CFEqual(expectedWindow, currentWindow),
+          let focused = focusedTarget(app: target.app), CFEqual(focused, element),
+          currentWeb.urls == target.webUrls, currentWeb.redacted == target.webRedacted,
+          targetAttr(element, kAXValueAttribute as String) as? String == value else { return false }
+    return true
+}
+private func currentContextMatches(_ target: InputTarget, value: String, range: CFRange) -> Bool {
+    guard contextFieldMatches(target, value: value), let element = target.element,
+          let currentRange = targetRange(element), currentRange.location == range.location,
+          currentRange.length == range.length else { return false }
+    return true
+}
+
+private func prepareBodyOnlyContextFallback(_ target: InputTarget, text: String, reason: String) -> ContextPreparation {
+    guard currentContextMatches(target, value: target.value ?? "", range: target.range ?? CFRange(location: -1, length: -1)),
+          let element = target.element, let value = target.value, let range = target.range,
+          let expected = expectedInsertion(value, range, text) else { return .refused("stale") }
+    target.expected = expected
+    target.insertedText = text
+    target.observationBaseValue = value
+    target.observationBaseRange = range
+    target.observationAfterPadding = 0
+    target.submitted = true
+    return .ready(ContextInjection(
+        strictTarget: TextInjector.StrictInputTarget(element: element, processID: target.app.processIdentifier,
+                                                     value: value, range: range, window: target.window,
+                                                     documentURLs: target.webUrls, webRedacted: target.webRedacted),
+        payload: text, applied: false, originalRange: range, reason: reason
+    ))
+}
+
+private func prepareContextEdit(_ token: String, _ text: String, _ editJSON: String) -> ContextPreparation {
+    guard let target = inputTargets[token] else { return .refused("injection_target_unavailable") }
+    if target.submitted { return .refused("already_sent") }
+    if let reason = target.ready() { return .refused(reason) }
+    guard !text.isEmpty else { return .refused("injection_failed") }
+    guard let element = target.element, let value = target.value, let range = target.range else { return .refused("unsupported") }
+    guard currentContextMatches(target, value: value, range: range) else { return .refused("stale") }
+    guard let edit = parseContextEdit(editJSON) else { return prepareBodyOnlyContextFallback(target, text: text, reason: "invalid") }
+    if edit.before == nil && edit.after == nil { return prepareBodyOnlyContextFallback(target, text: text, reason: "body_only") }
+    if target.webRedacted { return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported") }
+    let source = value as NSString
+    let beforeLength = ((edit.before?.original ?? "") as NSString).length
+    let afterLength = ((edit.after?.original ?? "") as NSString).length
+    guard range.location >= beforeLength, range.location + range.length <= source.length - afterLength else { return prepareBodyOnlyContextFallback(target, text: text, reason: "invalid") }
+    if let before = edit.before,
+       source.substring(with: NSRange(location: range.location - beforeLength, length: beforeLength)) != before.original { return prepareBodyOnlyContextFallback(target, text: text, reason: "invalid") }
+    if let after = edit.after,
+       source.substring(with: NSRange(location: range.location + range.length, length: afterLength)) != after.original { return prepareBodyOnlyContextFallback(target, text: text, reason: "invalid") }
+    let expandedRange = CFRange(location: range.location - beforeLength, length: range.length + beforeLength + afterLength)
+    guard expectedInsertion(value, expandedRange, "") != nil else { return prepareBodyOnlyContextFallback(target, text: text, reason: "invalid") }
+    var settable = DarwinBoolean(false)
+    guard AXUIElementIsAttributeSettable(element, kAXSelectedTextRangeAttribute as CFString, &settable) == .success,
+          settable.boolValue else { return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported") }
+    guard let expandedValue = targetRangeValue(expandedRange) else {
+        return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported")
+    }
+    let setResult = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, expandedValue)
+    if setResult != .success, currentContextMatches(target, value: value, range: range) { return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported") }
+    guard currentContextMatches(target, value: value, range: expandedRange) else {
+        // Restore only while the same field/value still has exactly the range
+        // this operation selected. Any other state is left untouched.
+        if currentContextMatches(target, value: value, range: expandedRange) {
+            if let originalValue = targetRangeValue(range) {
+                _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, originalValue)
+            }
+        }
+        return .refused("stale")
+    }
+    let payload = (edit.before?.replacement ?? "") + text + (edit.after?.replacement ?? "")
+    guard let expected = expectedInsertion(value, expandedRange, payload) else { return .refused("invalid") }
+    let beforeReplacementLength = ((edit.before?.replacement ?? "") as NSString).length
+    guard let observationBase = expectedInsertion(value, expandedRange, (edit.before?.replacement ?? "") + (edit.after?.replacement ?? "")) else { return .refused("invalid") }
+    target.expected = expected
+    target.insertedText = text
+    target.observationBaseValue = observationBase
+    target.observationBaseRange = CFRange(location: expandedRange.location + beforeReplacementLength, length: 0)
+    target.observationAfterPadding = ((edit.after?.replacement ?? "") as NSString).length
+    target.submitted = true
+    return .ready(ContextInjection(
+        strictTarget: TextInjector.StrictInputTarget(element: element, processID: target.app.processIdentifier,
+                                                     value: value, range: expandedRange, window: target.window,
+                                                     documentURLs: target.webUrls, webRedacted: target.webRedacted),
+        payload: payload, applied: edit.before != nil || edit.after != nil, originalRange: range, reason: nil
+    ))
+}
+
+private func restoreContextSelectionIfSafe(_ token: String, _ strictTarget: TextInjector.StrictInputTarget, _ originalRange: CFRange) {
+    guard let target = inputTargets[token], let element = target.element,
+          currentContextMatches(target, value: strictTarget.value, range: strictTarget.range),
+          let value = targetRangeValue(originalRange) else { return }
+    _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
+}
+
 /// One shared injector: VocaMac serializes every clipboard delivery through it.
 private let textInjector = TextInjector()
 
@@ -404,6 +561,53 @@ private func commitInputTargetThroughInjector(_ tokenPtr: UnsafePointer<CChar>?,
     }
 }
 
+private func commitInputTargetWithContextEditThroughInjector(
+    _ tokenPtr: UnsafePointer<CChar>?, _ textPtr: UnsafePointer<CChar>?, _ editPtr: UnsafePointer<CChar>?
+) -> UnsafeMutablePointer<CChar>? {
+    guard let tokenPtr, let textPtr, let editPtr else { return targetJSON(["reason": "injection_target_unavailable", "contextEditApplied": false]) }
+    let token = String(cString: tokenPtr), text = String(cString: textPtr), editJSON = String(cString: editPtr)
+    switch onTargetMain({ prepareContextEdit(token, text, editJSON) }) {
+    case .refused(let reason):
+        if reason == "already_sent" {
+            return targetJSON(["submitted": true, "uncertain": true, "reason": "injection_already_sent", "contextEditReason": "unknown"])
+        }
+        return targetJSON(["reason": "injection_target_changed", "contextEditApplied": false, "contextEditReason": reason])
+    case .ready(let injection):
+        let waiter = DeliveryWaiter()
+        textInjector.inject(text: injection.payload, preserveClipboard: true, strictTarget: injection.strictTarget) { waiter.report($0) }
+        if Thread.isMainThread {
+            return targetJSON(["submitted": true, "method": "unknown", "uncertain": true, "contextEditReason": "uncertain"])
+        }
+        switch waiter.wait(seconds: 8) {
+        case .accessibility:
+            var response: [String: Any] = ["submitted": true, "method": "accessibility", "contextEditApplied": injection.applied]
+            if let reason = injection.reason { response["contextEditReason"] = reason }
+            return targetJSON(response)
+        case .pasted:
+            var response: [String: Any] = ["submitted": true, "method": "clipboard", "contextEditApplied": injection.applied]
+            if let reason = injection.reason { response["contextEditReason"] = reason }
+            return targetJSON(response)
+        case .uncertain:
+            return targetJSON(["submitted": true, "method": "accessibility", "uncertain": true, "contextEditReason": "uncertain"])
+        case .failed(let reason):
+            onTargetMain {
+                restoreContextSelectionIfSafe(token, injection.strictTarget, injection.originalRange)
+                if let target = inputTargets[token] {
+                    target.submitted = false
+                    target.expected = nil
+                    target.insertedText = nil
+                    target.observationBaseValue = nil
+                    target.observationBaseRange = nil
+                    target.observationAfterPadding = 0
+                }
+            }
+            return targetJSON(["reason": reason, "contextEditApplied": false, "contextEditReason": "delivery_failed"])
+        case nil:
+            return targetJSON(["submitted": true, "method": "unknown", "uncertain": true, "contextEditReason": "uncertain"])
+        }
+    }
+}
+
 @_cdecl("verifyInputTarget")
 public func verifyInputTarget(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     guard let tokenPtr, let target = inputTargets[String(cString: tokenPtr)], target.submitted else { return targetJSON(["reason": "injection_target_unavailable"]) }
@@ -442,7 +646,9 @@ func observedInsertion(_ original: String, _ range: CFRange, _ current: String) 
 public func beginInputObservation(_ tokenPtr: UnsafePointer<CChar>?, _ textPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     guard let tokenPtr, let textPtr, let target = inputTargets[String(cString: tokenPtr)], target.verified, target.element != nil,
           target.insertedText == String(cString: textPtr), !target.webRedacted,
-          let original = target.value, let range = target.range, let expected = target.expected,
+          let original = target.observationBaseValue ?? target.value,
+          let range = target.observationBaseRange ?? target.range,
+          let expected = target.expected,
           observedInsertion(original, range, expected) == target.insertedText else { return targetJSON(["ok": false]) }
     target.observingSince = ProcessInfo.processInfo.systemUptime
     return targetJSON(["ok": true])
@@ -460,12 +666,13 @@ public func readInputObservation(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeMut
     guard let focused = focusedTarget(app: target.app), CFEqual(focused, element) else { return targetJSON(["active": false, "reason": "field_unfocused"]) }
     // The current field is read transiently to reject any change outside the
     // insertion. Nothing from a different target or outside that range returns.
-    guard let original = target.value, let range = target.range,
+    guard let original = target.observationBaseValue ?? target.value,
+          let range = target.observationBaseRange ?? target.range,
           let current = targetAttr(element, kAXValueAttribute as String) as? String,
           let text = observedInsertion(original, range, current), let selected = targetRange(element),
           selected.location >= range.location, selected.length >= 0,
-          selected.location <= range.location + (text as NSString).length,
-          selected.length <= range.location + (text as NSString).length - selected.location else { return targetJSON(["active": false, "reason": "range_changed"]) }
+          selected.location <= range.location + (text as NSString).length + target.observationAfterPadding,
+          selected.length <= max(0, range.location + (text as NSString).length - selected.location) else { return targetJSON(["active": false, "reason": "range_changed"]) }
     return targetJSON(["active": true, "text": text])
 }
 
@@ -489,4 +696,8 @@ public func prepareInputTarget(_ token: UnsafePointer<CChar>?) -> UnsafeMutableP
 @_cdecl("commitInputTarget")
 public func commitInputTarget(_ token: UnsafePointer<CChar>?, _ text: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     return commitInputTargetThroughInjector(token, text)
+}
+@_cdecl("commitInputTargetWithContextEdit")
+public func commitInputTargetWithContextEdit(_ token: UnsafePointer<CChar>?, _ text: UnsafePointer<CChar>?, _ editJSON: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
+    return commitInputTargetWithContextEditThroughInjector(token, text, editJSON)
 }
