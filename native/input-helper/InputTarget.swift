@@ -316,7 +316,7 @@ private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePoint
         let source = value as NSString
         result["selectedText"] = source.substring(with: NSRange(location: range.location, length: range.length))
         let start = max(0, range.location - 800), end = min(source.length, range.location + range.length + 400)
-        result["contextText"] = source.substring(with: NSRange(location: start, length: min(2000, end - start)))
+        result["contextText"] = contextSubstring(source, range: NSRange(location: start, length: min(2000, end - start)))
         result["contextBefore"] = contextSubstring(source, range: NSRange(location: max(0, range.location - 800), length: min(800, range.location)))
         result["contextSelection"] = contextSubstring(source, range: NSRange(location: range.location, length: min(400, range.length)))
         result["contextAfter"] = contextSubstring(source, range: NSRange(location: range.location + range.length,

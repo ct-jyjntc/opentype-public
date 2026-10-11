@@ -157,7 +157,7 @@ std::string capture(bool allowReadOnly,bool keepTarget=true) {
   if(readable&&!redacted&&(value.writable||allowReadOnly)){
     base+=",\"selectedText\":"+ot::quote(value.value.substr(value.start,value.end-value.start));
     int start=std::max(0,value.start-800),end=std::min(static_cast<int>(value.value.size()),value.end+400);
-    base+=",\"contextText\":"+ot::quote(value.value.substr(start,std::min(2000,end-start)));
+    base+=",\"contextText\":"+ot::quote(contextSlice(value.value,start,start+std::min(2000,end-start)));
     base+=",\"contextBefore\":"+ot::quote(contextSlice(value.value,std::max(0,value.start-800),value.start));
     base+=",\"contextSelection\":"+ot::quote(contextSlice(value.value,value.start,std::min(value.end,value.start+400)));
     base+=",\"contextAfter\":"+ot::quote(contextSlice(value.value,value.end,std::min(static_cast<int>(value.value.size()),value.end+400)));
