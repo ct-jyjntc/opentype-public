@@ -9,6 +9,9 @@ export interface InputSnapshot {
   role?: string
   selectedText?: string
   contextText?: string
+  contextBefore?: string
+  contextSelection?: string
+  contextAfter?: string
   webUrl?: string
   webUrls?: string[]
   contextRedacted?: boolean

@@ -685,9 +685,12 @@ export const HistoryRepo = {
     return rows.map((r) => {
       pushedVersions.set(r.id, pushVersion(r))
       // Keep AX dumps, local paths, input-field snapshots and diagnostic payloads local.
-      // The local audio_context column keeps input_context; only the upload omits it.
+      // The local audio_context keeps input snapshots; the upload omits all input text.
       const context: Partial<ReturnType<typeof voiceContext>> = voiceContext(r.audioContext, r, blacklist)
       delete context.input_context
+      delete context.input_context_before
+      delete context.input_context_selection
+      delete context.input_context_after
       const meta = jsonObject(r.modeMeta)
       delete meta.selected_text
       const fields = toSnakeCase(r)

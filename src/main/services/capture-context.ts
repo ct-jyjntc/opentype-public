@@ -8,7 +8,9 @@ export function capturedContext(target: InputSnapshot, blacklistDomains: string[
   const urls = target.webUrls?.length ? target.webUrls : [target.webUrl ?? '']
   const fields = { app_name: target.appName, bundle_id: target.bundleId, role: target.role }
   const blocked = urls.some(web_url => voiceContext({ ...fields, web_url }, {}, blacklistDomains).redacted)
-  const context = voiceContext({ ...fields, input_context: target.contextText, web_url: target.webUrl,
+  const context = voiceContext({ ...fields, input_context: target.contextText,
+    input_context_before: target.contextBefore, input_context_selection: target.contextSelection, input_context_after: target.contextAfter,
+    web_url: target.webUrl,
     redacted: target.contextRedacted === true || blocked }, {}, blacklistDomains)
   return { appName: target.appName, bundleId: target.bundleId, audioContext: context,
     selectedText: context.redacted ? '' : target.selectedText ?? '', inputTraceId: target.traceId, inputToken: target.token, inputError: target.reason,

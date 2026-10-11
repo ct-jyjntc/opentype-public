@@ -33,6 +33,14 @@ bool protectedField(IUIAutomationElement* element) {
     ComPtr<IUIAutomationElement> parent;if(FAILED(walker->GetParentElement(current.Get(),&parent)))return true;current=parent;
   }return true;
 }
+std::wstring contextSlice(const std::wstring& value,int start,int end) {
+  start=std::clamp(start,0,static_cast<int>(value.size()));end=std::clamp(end,start,static_cast<int>(value.size()));
+  if(start>0&&start<static_cast<int>(value.size())&&value[start]>=0xDC00&&value[start]<=0xDFFF
+    &&value[start-1]>=0xD800&&value[start-1]<=0xDBFF)start--;
+  if(end>0&&end<static_cast<int>(value.size())&&value[end-1]>=0xD800&&value[end-1]<=0xDBFF
+    &&value[end]>=0xDC00&&value[end]<=0xDFFF)end++;
+  return value.substr(start,end-start);
+}
 std::vector<std::wstring> webURLs(IUIAutomationElement* element,bool* needsRedaction=nullptr) {
   std::vector<std::wstring> urls;auto* api=ot::automation();ComPtr<IUIAutomationTreeWalker> walker;
   if(needsRedaction)*needsRedaction=true;
@@ -150,6 +158,9 @@ std::string capture(bool allowReadOnly,bool keepTarget=true) {
     base+=",\"selectedText\":"+ot::quote(value.value.substr(value.start,value.end-value.start));
     int start=std::max(0,value.start-800),end=std::min(static_cast<int>(value.value.size()),value.end+400);
     base+=",\"contextText\":"+ot::quote(value.value.substr(start,std::min(2000,end-start)));
+    base+=",\"contextBefore\":"+ot::quote(contextSlice(value.value,std::max(0,value.start-800),value.start));
+    base+=",\"contextSelection\":"+ot::quote(contextSlice(value.value,value.start,std::min(value.end,value.start+400)));
+    base+=",\"contextAfter\":"+ot::quote(contextSlice(value.value,value.end,std::min(static_cast<int>(value.value.size()),value.end+400)));
   }
   RECT bounds;if(GetWindowRect(window,&bounds))base+=",\"windowBounds\":"+ot::object({{"x",std::to_string(bounds.left)},{"y",std::to_string(bounds.top)},
     {"width",std::to_string(bounds.right-bounds.left)},{"height",std::to_string(bounds.bottom-bounds.top)}});

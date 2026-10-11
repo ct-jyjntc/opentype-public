@@ -30,6 +30,15 @@ private func targetJSON(_ value: [String: Any]) -> UnsafeMutablePointer<CChar>? 
     guard let data = try? JSONSerialization.data(withJSONObject: value), let string = String(data: data, encoding: .utf8) else { return strdup("{}") }
     return strdup(string)
 }
+private func contextSubstring(_ source: NSString, range: NSRange) -> String {
+    var start = max(0, min(range.location, source.length))
+    var end = max(start, min(range.location + range.length, source.length))
+    if start > 0, start < source.length, (0xDC00...0xDFFF).contains(source.character(at: start)) { start -= 1 }
+    if end > 0, end < source.length,
+       (0xD800...0xDBFF).contains(source.character(at: end - 1)),
+       (0xDC00...0xDFFF).contains(source.character(at: end)) { end += 1 }
+    return source.substring(with: NSRange(location: start, length: end - start))
+}
 private func editableTarget(_ element: AXUIElement, failure: ((String) -> Void)? = nil) -> AXUIElement? {
     var current: AXUIElement? = element
     for _ in 0..<12 {
@@ -308,6 +317,10 @@ private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePoint
         result["selectedText"] = source.substring(with: NSRange(location: range.location, length: range.length))
         let start = max(0, range.location - 800), end = min(source.length, range.location + range.length + 400)
         result["contextText"] = source.substring(with: NSRange(location: start, length: min(2000, end - start)))
+        result["contextBefore"] = contextSubstring(source, range: NSRange(location: max(0, range.location - 800), length: min(800, range.location)))
+        result["contextSelection"] = contextSubstring(source, range: NSRange(location: range.location, length: min(400, range.length)))
+        result["contextAfter"] = contextSubstring(source, range: NSRange(location: range.location + range.length,
+            length: min(400, source.length - range.location - range.length)))
     }
     return targetJSON(result)
 }
