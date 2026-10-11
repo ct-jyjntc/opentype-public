@@ -1,0 +1,115 @@
+name: Windows beta package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing prerelease tag, for example v0.2.2-beta.4
+        required: true
+        type: string
+      source_sha:
+        description: Full 40-character commit SHA targeted by that tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js x64
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          architecture: x64
+          package-manager-cache: false
+
+      - name: Verify tag, commit, beta version, and existing prerelease
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+-beta\.\d+$') { throw 'Expected a versioned beta tag.' }
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Expected a full lowercase commit SHA.' }
+          $tagSha = (git rev-parse "refs/tags/$env:RELEASE_TAG^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagSha -ne $env:SOURCE_SHA) { throw 'The tag does not point to source_sha.' }
+          $version = (node -p "require('./package.json').version").Trim()
+          if ("v$version" -ne $env:RELEASE_TAG) { throw 'package.json version does not match the release tag.' }
+          $release = gh release view $env:RELEASE_TAG --repo ct-jyjntc/opentype-public --json tagName,isPrerelease | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.tagName -ne $env:RELEASE_TAG -or !$release.isPrerelease) {
+            throw 'The exact tag must already have a GitHub prerelease.'
+          }
+
+      - name: Install Windows dependencies
+        run: npm ci
+
+      - name: Download and verify the pinned SenseVoice model
+        run: node scripts/prepare-release-model.mjs
+
+      - name: Build Windows native helpers
+        run: npm run native
+
+      - name: Build app and Windows beta installer
+        shell: pwsh
+        run: |
+          npm run build:main
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:renderer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx electron-builder --config electron-builder.windows.beta.cjs --win nsis --x64 --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Create SHA-256 manifest
+        shell: pwsh
+        run: |
+          $version = (node -p "require('./package.json').version").Trim()
+          $output = Join-Path 'release/testing' $version
+          $assets = @(Get-ChildItem $output -File | Where-Object { $_.Name -match '^OpenType-.*-Windows-x64\.exe(\.blockmap)?$' -or $_.Name -eq 'beta.yml' })
+          if (-not ($assets.Name -contains 'beta.yml')) { throw 'electron-builder did not produce beta.yml.' }
+          if (-not ($assets.Name -match '^OpenType-.*-Windows-x64\.exe$')) { throw 'electron-builder did not produce the x64 NSIS installer.' }
+          $lines = foreach ($asset in ($assets | Sort-Object Name)) {
+            $digest = (Get-FileHash -Algorithm SHA256 $asset.FullName).Hash.ToLowerInvariant()
+            "$digest  $($asset.Name)"
+          }
+          Set-Content -Path (Join-Path $output 'SHA256SUMS-Windows-x64.txt') -Value $lines -Encoding utf8NoBOM
+
+      - name: Upload Windows beta assets to the matching prerelease
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $release = gh release view $env:RELEASE_TAG --repo ct-jyjntc/opentype-public --json tagName,isPrerelease,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.tagName -ne $env:RELEASE_TAG -or !$release.isPrerelease) {
+            throw 'Refusing to upload unless the exact tag is an existing prerelease.'
+          }
+          $version = (node -p "require('./package.json').version").Trim()
+          $output = Join-Path 'release/testing' $version
+          $localAssets = @(Get-ChildItem $output -File | Where-Object { $_.Name -match '^OpenType-.*-Windows-x64\.exe(\.blockmap)?$' -or $_.Name -in @('beta.yml','SHA256SUMS-Windows-x64.txt') })
+          $upload = @()
+          foreach ($asset in $localAssets) {
+            $digest = 'sha256:' + (Get-FileHash -Algorithm SHA256 $asset.FullName).Hash.ToLowerInvariant()
+            $existing = $release.assets | Where-Object { $_.name -eq $asset.Name } | Select-Object -First 1
+            if ($existing) {
+              if ($existing.digest -ne $digest) { throw "Existing asset $($asset.Name) has a different digest; refusing to replace it." }
+            } else {
+              $upload += $asset.FullName
+            }
+          }
+          foreach ($assetPath in $upload) {
+            gh release upload $env:RELEASE_TAG $assetPath --repo ct-jyjntc/opentype-public
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

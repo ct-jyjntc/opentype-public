@@ -67,6 +67,68 @@ private func parseContextEdit(_ json: String) -> ContextEdit? {
     if dictionary["after"] != nil, contextEditSide(dictionary["after"]) == nil { return nil }
     return ContextEdit(before: dictionary["before"].flatMap(contextEditSide), after: dictionary["after"].flatMap(contextEditSide))
 }
+private func contextWordUnit(_ value: unichar) -> Bool {
+    if (value >= 0xD800 && value <= 0xDFFF) || value == 0x5F { return true }
+    guard let scalar = UnicodeScalar(value) else { return true }
+    return CharacterSet.alphanumerics.contains(scalar)
+}
+private func safeNaturalContextEdit(_ value: String, _ range: CFRange, _ text: String, _ edit: ContextEdit) -> Bool {
+    guard range.length == 0, let before = edit.before, edit.after == nil,
+          (before.original as NSString).length == 1, (before.replacement as NSString).length == 1,
+          let original = before.original.utf16.first, let replacement = before.replacement.utf16.first,
+          [0x002E, 0x0021, 0x003F, 0x3002, 0xFF01, 0xFF1F].contains(original),
+          [0x002C, 0xFF0C, 0x3001].contains(replacement) else { return false }
+    guard !text.unicodeScalars.contains(where: { CharacterSet.newlines.contains($0) }) else { return false }
+    let source = value as NSString
+    guard range.location >= 1, range.location <= source.length,
+          source.substring(with: NSRange(location: range.location - 1, length: 1)) == before.original else { return false }
+    let leftUnit = range.location >= 2 ? source.character(at: range.location - 2) : 0
+    let leftIsDigit = UnicodeScalar(leftUnit).map { CharacterSet.decimalDigits.contains($0) } ?? false
+    let rightUnit = range.location < source.length ? source.character(at: range.location) : nil
+    let rightIsDigit: Bool
+    if let rightUnit, let scalar = UnicodeScalar(rightUnit) { rightIsDigit = CharacterSet.decimalDigits.contains(scalar) }
+    else { rightIsDigit = false }
+    if leftIsDigit || rightIsDigit || (original == 0x002E && contextWordUnit(leftUnit) && rightUnit.map(contextWordUnit) == true) { return false }
+    if original == 0x003F && contextWordUnit(leftUnit) && rightUnit.map(contextWordUnit) == true { return false }
+    guard contextWordUnit(leftUnit), let firstBody = text.utf16.first, contextWordUnit(firstBody) else { return false }
+
+    // Omit the candidate mark, but inspect the complete captured line so
+    // operators elsewhere in a ternary or expression still block the edit.
+    let combined = source.substring(to: range.location - 1) + text + source.substring(from: range.location)
+    let combinedSource = combined as NSString
+    let combinedCaret = range.location - 1 + (text as NSString).length
+    var lineStart = combinedCaret
+    while lineStart > 0 {
+        let unit = combinedSource.character(at: lineStart - 1)
+        if unit == 0x000A || unit == 0x000D { break }
+        lineStart -= 1
+    }
+    var lineEnd = combinedCaret
+    while lineEnd < combinedSource.length {
+        let unit = combinedSource.character(at: lineEnd)
+        if unit == 0x000A || unit == 0x000D { break }
+        lineEnd += 1
+    }
+    let line = combinedSource.substring(with: NSRange(location: lineStart, length: lineEnd - lineStart))
+    let hazards = CharacterSet(charactersIn: ":;()[]{}<>$%&|+-*/\\`_@#=~\"'")
+    if line.rangeOfCharacter(from: hazards) != nil || line.localizedCaseInsensitiveContains("www.") { return false }
+    let codePrefix = try? NSRegularExpression(pattern: "^\\s*(?:if|else|return|const|let|var|function|class|import|export|async|await|throw|try|catch|switch|case|for|while|new|def|fn|public|private|static)\\b")
+    if codePrefix?.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) != nil { return false }
+    let marker = try? NSRegularExpression(pattern: "^\\s*(?:#{1,6}\\s|>\\s|[-+*]\\s|\\d{1,3}[.)]\\s)")
+    if marker?.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) != nil { return false }
+    if original == 0x002E {
+        var sourceLineStart = range.location - 1
+        while sourceLineStart > 0 {
+            let unit = source.character(at: sourceLineStart - 1)
+            if unit == 0x000A || unit == 0x000D { break }
+            sourceLineStart -= 1
+        }
+        let leftLine = source.substring(with: NSRange(location: sourceLineStart, length: range.location - 1 - sourceLineStart))
+        let numbered = try? NSRegularExpression(pattern: "^\\s*\\d{1,3}$")
+        if numbered?.firstMatch(in: leftLine, range: NSRange(location: 0, length: (leftLine as NSString).length)) != nil { return false }
+    }
+    return true
+}
 private func targetJSON(_ value: [String: Any]) -> UnsafeMutablePointer<CChar>? {
     guard let data = try? JSONSerialization.data(withJSONObject: value), let string = String(data: data, encoding: .utf8) else { return strdup("{}") }
     return strdup(string)
@@ -474,6 +536,7 @@ private func prepareContextEdit(_ token: String, _ text: String, _ editJSON: Str
     guard currentContextMatches(target, value: value, range: range, checkDocument: true) else { return .refused("stale") }
     guard let edit = parseContextEdit(editJSON) else { return prepareBodyOnlyContextFallback(target, text: text, reason: "invalid") }
     if edit.before == nil && edit.after == nil { return prepareBodyOnlyContextFallback(target, text: text, reason: "body_only") }
+    guard safeNaturalContextEdit(value, range, text, edit) else { return prepareBodyOnlyContextFallback(target, text: text, reason: "unsafe_context") }
     if target.webRedacted { return prepareBodyOnlyContextFallback(target, text: text, reason: "unsupported") }
     let source = value as NSString
     let beforeLength = ((edit.before?.original ?? "") as NSString).length

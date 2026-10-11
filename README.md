@@ -44,7 +44,7 @@ npm run build:renderer
 
 ## 打包
 
-准备好模型文件后，在 macOS 上生成包含模型的本地测试包：
+在 macOS 上运行打包命令。它会复用通过固定版本和 SHA-256 校验的模型文件；缺失或校验失败时从官网重新获取，再生成 Apple Silicon DMG、ZIP、beta 更新元数据和 SHA-256 校验文件：
 
 ```bash
 npm run pack:beta
@@ -56,7 +56,7 @@ macOS 临时签名版本使用事务式 ZIP 更新：应用通过固定 GitHub H
 
 从尚未包含此安装器的旧版本升级时，需要先手动安装包含新安装器的修复版；公开的旧版不会获得此修复。启动确认记录与失败诊断保存在当前用户数据目录的 `update-install/` 中。
 
-Windows x64 原生源码和 `electron-builder.windows.cjs` 配置保留，需要 Windows SDK、MSVC、CMake 及 x64 Node/Electron。当前仓库的历史验收记录没有 Windows 编译和运行结果，不能视为可用 Windows 发布版。
+Windows x64 原生组件需要 Windows SDK、MSVC、CMake 及 x64 Node/Electron。本地可在 Windows 环境构建；仓库的 `Windows beta package` 工作流则使用 Windows runner，要求提供已存在的 beta release tag 和完整源码 SHA，按该提交构建当前原生源码与 x64 NSIS 安装包，并上传到同 tag 的 beta release。该工作流不更新正式版通道。
 
 检查更新、发布页与构建发布配置均使用 `ct-jyjntc/opentype-public`。[最新正式版](https://github.com/ct-jyjntc/opentype-public/releases/latest) 提供 DMG、ZIP、更新元数据与校验文件，为临时签名，未经 Apple 公证。
 

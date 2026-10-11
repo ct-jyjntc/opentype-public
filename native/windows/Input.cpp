@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <optional>
 #include <cstdint>
+#include <cwctype>
 
 namespace {
 constexpr int documentLimit = 1000000;
@@ -72,6 +73,49 @@ bool parseContextEdit(const std::string& input,ContextEdit& edit){
     skipJSONSpace(input,at);if(at<input.size()&&input[at]==','){at++;skipJSONSpace(input,at);continue;}break;
   }
   if(at>=input.size()||input[at++]!='}'||(!seenBefore&&!seenAfter))return false;skipJSONSpace(input,at);return at==input.size();
+}
+bool contextWordUnit(wchar_t value){
+  const auto c=static_cast<unsigned>(value);
+  return std::iswalnum(value)!=0||value==L'_'||(c>=0xd800&&c<=0xdfff)||(c>=0x1100&&c<=0x11ff)||
+    (c>=0x3040&&c<=0x30ff)||(c>=0x3400&&c<=0x9fff)||(c>=0xac00&&c<=0xd7af)||(c>=0xf900&&c<=0xfaff);
+}
+bool safeNaturalContextEdit(const std::wstring& value,int start,int end,const std::wstring& text,const ContextEdit& edit){
+  if(start!=end||!edit.before||edit.after||edit.before->original.size()!=1||edit.before->replacement.size()!=1||text.empty()||text.find_first_of(L"\r\n\u2028\u2029")!=std::wstring::npos)return false;
+  const wchar_t original=edit.before->original[0],replacement=edit.before->replacement[0];
+  const bool sentence=original==L'.'||original==L'!'||original==L'?'||original==0x3002||original==0xff01||original==0xff1f;
+  const bool comma=replacement==L','||replacement==0xff0c||replacement==0x3001;
+  if(!sentence||!comma||start<1||start>static_cast<int>(value.size())||value[static_cast<size_t>(start-1)]!=original)return false;
+  const wchar_t left=start>=2?value[static_cast<size_t>(start-2)]:0;
+  const wchar_t right=start<static_cast<int>(value.size())?value[static_cast<size_t>(start)]:0;
+  if(std::iswdigit(left)||std::iswdigit(right)||(original==L'.'&&contextWordUnit(left)&&contextWordUnit(right)))return false;
+  if(original==L'?'&&contextWordUnit(left)&&contextWordUnit(right))return false;
+  if(!contextWordUnit(left)||!contextWordUnit(text.front()))return false;
+
+  // Omit the candidate mark but retain the entire captured line. This keeps
+  // surrounding operators visible without treating a prose '?' as a hazard.
+  std::wstring combined=value.substr(0,static_cast<size_t>(start-1))+text+value.substr(static_cast<size_t>(start));
+  const size_t mark=static_cast<size_t>(start-1)+text.size();
+  const size_t lineStart=combined.find_last_of(L"\r\n",mark==0?0:mark-1);
+  const size_t lineBegin=lineStart==std::wstring::npos?0:lineStart+1;
+  const size_t lineEnd=combined.find_first_of(L"\r\n",mark);
+  const std::wstring line=combined.substr(lineBegin,(lineEnd==std::wstring::npos?combined.size():lineEnd)-lineBegin);
+  for(wchar_t hazard:{L':',L';',L'(',L')',L'[',L']',L'{',L'}',L'<',L'>',L'$',L'%',L'&',L'|',L'+',L'-',L'*',L'/',L'\\',L'`',L'_',L'@',L'#',L'=',L'~',L'\'',L'"'})
+    if(line.find(hazard)!=std::wstring::npos)return false;
+  if(line.find(L"www.")!=std::wstring::npos||line.find(L"WWW.")!=std::wstring::npos)return false;
+  const auto first=line.find_first_not_of(L" \t");
+  const std::wstring trimmed=first==std::wstring::npos?L"":line.substr(first);
+  for(const wchar_t* keyword:{L"if",L"else",L"return",L"const",L"let",L"var",L"function",L"class",L"import",L"export",L"async",L"await",L"throw",L"try",L"catch",L"switch",L"case",L"for",L"while",L"new",L"def",L"fn",L"public",L"private",L"static"}){
+    const std::wstring word(keyword);if(trimmed.rfind(word,0)==0&&(trimmed.size()==word.size()||!contextWordUnit(trimmed[word.size()])))return false;
+  }
+  if(trimmed.rfind(L"# ",0)==0||trimmed.rfind(L"> ",0)==0||trimmed.rfind(L"- ",0)==0||trimmed.rfind(L"+ ",0)==0||trimmed.rfind(L"* ",0)==0)return false;
+  if(original==L'.'){
+    size_t sourceLineBegin=static_cast<size_t>(start-1);while(sourceLineBegin>0&&value[sourceLineBegin-1]!=L'\r'&&value[sourceLineBegin-1]!=L'\n')sourceLineBegin--;
+    const auto lineBefore=value.substr(sourceLineBegin,static_cast<size_t>(start-1)-sourceLineBegin);
+    {const auto a=lineBefore.find_first_not_of(L" \t"),b=lineBefore.find_last_not_of(L" \t");
+      if(a==std::wstring::npos)return false;const auto token=lineBefore.substr(a,b-a+1);
+      if(!token.empty()&&std::all_of(token.begin(),token.end(),[](wchar_t c){return std::iswdigit(c)!=0;}))return false;}
+  }
+  return true;
 }
 std::wstring bstr(BSTR value) { return value ? std::wstring(value,SysStringLen(value)) : L""; }
 std::wstring rangeText(IUIAutomationTextRange* range,int maximum=documentLimit+1) {
@@ -376,9 +420,10 @@ std::string commitContextEdit(Target& target,const std::wstring& text,const std:
     return contextResponse(false,false,"",false,"stale","injection_target_changed");
   ContextEdit edit;const bool validEdit=parseContextEdit(editJSON,edit);
   const bool requestedEdit=validEdit&&(edit.before.has_value()||edit.after.has_value());
-  const bool eligibleEdit=requestedEdit&&!target.webRedacted;
+  const bool safeEdit=requestedEdit&&safeNaturalContextEdit(target.original.value,target.original.start,target.original.end,text,edit);
+  const bool eligibleEdit=safeEdit&&!target.webRedacted;
   int expandedStart=originalStart,expandedEnd=originalEnd;
-  std::wstring payload=text;bool applied=false;const char* fallbackReason=!validEdit?"invalid":(target.webRedacted?"unsupported":"body_only");
+  std::wstring payload=text;bool applied=false;const char* fallbackReason=!validEdit?"invalid":(requestedEdit&&!safeEdit?"unsafe_context":(target.webRedacted?"unsupported":"body_only"));
   ComPtr<IUIAutomationTextRange> originalSelection;
   if(eligibleEdit){
     const int beforeLength=edit.before?static_cast<int>(edit.before->original.size()):0;
