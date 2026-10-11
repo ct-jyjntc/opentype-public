@@ -11,6 +11,11 @@ on:
         description: Full 40-character commit SHA targeted by that tag
         required: true
         type: string
+      publish:
+        description: Upload to an existing prerelease. Disable to build and retain an Actions artifact only.
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -40,14 +45,26 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           SOURCE_SHA: ${{ inputs.source_sha }}
-          GH_TOKEN: ${{ github.token }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+-beta\.\d+$') { throw 'Expected a versioned beta tag.' }
           if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Expected a full lowercase commit SHA.' }
-          $tagSha = (git rev-parse "refs/tags/$env:RELEASE_TAG^{commit}").Trim()
-          if ($LASTEXITCODE -ne 0 -or $tagSha -ne $env:SOURCE_SHA) { throw 'The tag does not point to source_sha.' }
+          $checkedOutSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $checkedOutSha -ne $env:SOURCE_SHA) { throw 'Checkout does not match source_sha.' }
           $version = (node -p "require('./package.json').version").Trim()
           if ("v$version" -ne $env:RELEASE_TAG) { throw 'package.json version does not match the release tag.' }
+          if ($env:PUBLISH -ne 'true') { Write-Host 'Build-only mode: release validation and upload are skipped.' }
+
+      - name: Verify the prerelease target
+        if: ${{ inputs.publish }}
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tagSha = (git rev-parse "refs/tags/$env:RELEASE_TAG^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagSha -ne $env:SOURCE_SHA) { throw 'The tag does not point to source_sha.' }
           $release = gh release view $env:RELEASE_TAG --repo ct-jyjntc/opentype-public --json tagName,isPrerelease | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $release.tagName -ne $env:RELEASE_TAG -or !$release.isPrerelease) {
             throw 'The exact tag must already have a GitHub prerelease.'
@@ -86,7 +103,19 @@ jobs:
           }
           Set-Content -Path (Join-Path $output 'SHA256SUMS-Windows-x64.txt') -Value $lines -Encoding utf8NoBOM
 
+      - name: Retain Windows beta package for review
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: OpenType-Windows-x64-${{ inputs.tag }}-${{ inputs.source_sha }}
+          path: |
+            release/testing/*/OpenType-*-Windows-x64.exe
+            release/testing/*/OpenType-*-Windows-x64.exe.blockmap
+            release/testing/*/beta.yml
+            release/testing/*/SHA256SUMS-Windows-x64.txt
+          if-no-files-found: error
+
       - name: Upload Windows beta assets to the matching prerelease
+        if: ${{ inputs.publish }}
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.tag }}

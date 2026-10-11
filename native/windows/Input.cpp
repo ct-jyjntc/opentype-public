@@ -477,7 +477,7 @@ std::string commitContextEdit(Target& target,const std::wstring& text,const std:
   DWORD sequence=0;
   try{
     if(!strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))throw std::runtime_error("injection_target_changed");
-    if(!payload.empty())clipboardLease=std::make_unique<otclip::Lease>(payload);
+    if(!payload.empty())clipboardLease=std::make_unique<otclip::Lease>(payload,std::string{});
     if(!strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))throw std::runtime_error("injection_target_changed");
     if(clipboardLease)sequence=clipboardLease->apply();
     if(!strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))throw std::runtime_error("injection_target_changed");
