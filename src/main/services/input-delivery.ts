@@ -45,8 +45,11 @@ export async function deliverToInput(
 ): Promise<DeliveryOutcome> {
   signal.throwIfAborted()
   if (!snapshot.token) throw new Error(snapshot.reason || 'injection_target_unavailable')
-  const token = snapshot.token, prepared = await native.prepare(token)
-  if (!prepared.ok) throw new Error(prepared.reason || 'injection_target_unavailable')
+  const token = snapshot.token
+  if (!contextEdit) {
+    const prepared = await native.prepare(token)
+    if (!prepared.ok) throw new Error(prepared.reason || 'injection_target_unavailable')
+  }
   let ready = false, pendingReason = 'injection_target_unavailable'
   for (let attempt = 0; attempt < 20; attempt++) {
     signal.throwIfAborted()
