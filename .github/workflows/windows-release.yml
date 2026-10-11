@@ -120,7 +120,7 @@ jobs:
             const koffi = fromApp('koffi');
             const sherpa = fromApp('sherpa-onnx-node');
             const { OfflineRecognizer } = sherpa;
-            const { samples, sampleRate } = sherpa.readWave(wav);
+            const { samples, sampleRate } = sherpa.readWave(wav, false);
             const modelDir = path.join(process.resourcesPath, 'models', 'sensevoice-int8');
             const recognizer = new OfflineRecognizer({ featConfig: { sampleRate: 16000, featureDim: 80 }, modelConfig: {
               senseVoice: { model: path.join(modelDir, 'model.int8.onnx'), language: 'auto', useInverseTextNormalization: 1 },
@@ -183,11 +183,14 @@ jobs:
           $feed = Get-Content (Join-Path $output 'latest.yml') -Raw
           $entry = [regex]::Match($feed, "(?ms)^\s*-\s+url:\s*$([regex]::Escape($installer.Name))\s*\r?\n\s+sha512:\s*(\S+)\s*\r?\n\s+size:\s*(\d+)")
           if (-not $entry.Success) { throw 'latest.yml has no complete matching installer entry.' }
-          if ([long]$entry.Groups[3].Value -ne $installer.Length) { throw 'latest.yml installer size does not match the produced installer.' }
+          $declaredSize = [long]$entry.Groups[2].Value
+          Write-Host "Feed installer url=$($installer.Name) declaredSize=$declaredSize actualSize=$($installer.Length)"
+          if ($declaredSize -ne $installer.Length) { throw 'latest.yml installer size does not match the produced installer.' }
           $sha512 = [Security.Cryptography.SHA512]::Create()
           $stream = [IO.File]::OpenRead($installer.FullName)
           try { $actualSha512 = [Convert]::ToBase64String($sha512.ComputeHash($stream)) } finally { $stream.Dispose(); $sha512.Dispose() }
-          if ($entry.Groups[2].Value -ne $actualSha512) { throw 'latest.yml installer SHA-512 does not match the produced installer.' }
+          Write-Host "Feed installer sha512=$($entry.Groups[1].Value) actualSha512=$actualSha512"
+          if ($entry.Groups[1].Value -ne $actualSha512) { throw 'latest.yml installer SHA-512 does not match the produced installer.' }
           $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
           $lines = @("$hash  $($installer.Name)")
           Get-ChildItem $output -Filter '*.blockmap' -File | ForEach-Object { $lines += "$( (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant() )  $($_.Name)" }
