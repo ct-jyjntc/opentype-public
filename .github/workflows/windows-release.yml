@@ -176,11 +176,32 @@ jobs:
             return $true
           } | ForEach-Object FullName)
           $nativeFiles += @((Join-Path $output 'win-unpacked/OpenType.exe'), (Join-Path $output 'win-unpacked/resources/lib/windows/build/OpenTypeNative.dll'), (Join-Path $output 'win-unpacked/resources/lib/windows/build/OutputAudio.exe'), (Join-Path $output 'win-unpacked/resources/lib/windows/build/ClipboardGuard.exe'))
+          $nativeFiles += @(Get-ChildItem (Join-Path $output 'win-unpacked') -Filter '*.dll' -File | ForEach-Object FullName)
           foreach ($path in $nativeFiles) {
             if (-not (Test-Path $path)) { throw "Packaged native binary is missing: $path" }
             $machine = & $peMachine $path
             if ($machine -ne $expectedMachine) { throw "PE machine mismatch in $path`: $machine" }
             Write-Host "PE $path machine=0x$('{0:X4}' -f $machine)"
+          }
+          if ($env:PACKAGE_ARCH -eq 'arm64') {
+            $runtimeSource = 'node_modules/sherpa-onnx-win-arm64/vc-runtime'
+            $runtimeDlls = @(Get-ChildItem $runtimeSource -Filter '*.dll' -File)
+            foreach ($requiredName in @('MSVCP140.dll', 'MSVCP140_1.dll', 'VCRUNTIME140.dll')) {
+              if ($requiredName -notin $runtimeDlls.Name) { throw "The staged ARM64 VC runtime is missing $requiredName." }
+            }
+            $installedDir = Join-Path 'tmp' 'release-${{ github.run_id }}/installed-arm64'
+            foreach ($runtimeDll in $runtimeDlls) {
+              $packagedRuntime = Join-Path $output "win-unpacked/$($runtimeDll.Name)"
+              $installedRuntime = Join-Path $installedDir $runtimeDll.Name
+              foreach ($runtimePath in @($packagedRuntime, $installedRuntime)) {
+                if (-not (Test-Path $runtimePath)) { throw "App-local ARM64 VC runtime is missing beside OpenType.exe: $runtimePath" }
+                $machine = & $peMachine $runtimePath
+                if ($machine -ne 0xAA64) { throw "App-local VC runtime is not ARM64: $runtimePath" }
+                $expectedHash = (Get-FileHash -Algorithm SHA256 $runtimeDll.FullName).Hash.ToLowerInvariant()
+                if ((Get-FileHash -Algorithm SHA256 $runtimePath).Hash.ToLowerInvariant() -ne $expectedHash) { throw "Packaged VC runtime hash differs from the selected Visual Studio redistributable: $runtimePath" }
+                Write-Host "App-local VC runtime $runtimePath machine=0xAA64 SHA-256=$expectedHash"
+              }
+            }
           }
           $feed = Get-Content (Join-Path $output 'latest.yml') -Raw
           $entry = [regex]::Match($feed, "(?ms)^\s*-\s+url:\s*$([regex]::Escape($installer.Name))\s*\r?\n\s+sha512:\s*(\S+)\s*\r?\n\s+size:\s*(\d+)")
@@ -198,7 +219,9 @@ jobs:
           Get-ChildItem $output -Filter '*.blockmap' -File | ForEach-Object { $lines += "$( (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant() )  $($_.Name)" }
           $feedDigest = (Get-FileHash -Algorithm SHA256 (Join-Path $output 'latest.yml')).Hash.ToLowerInvariant()
           $lines += "$feedDigest  latest.yml"
-          $provenance = [ordered]@{ sourceCommit=$env:RELEASE_SHA; version='0.2.2'; arch=$env:PACKAGE_ARCH; installerSha256=$hash; modelManifestSha256=(Get-FileHash -Algorithm SHA256 'src/main/services/local-asr/model-store.ts').Hash.ToLowerInvariant(); signing='unsigned' }
+          $vcRuntime = if ($env:PACKAGE_ARCH -eq 'arm64') { Get-Content 'node_modules/sherpa-onnx-win-arm64/VC-RUNTIME-PROVENANCE.txt' -Raw } else { $null }
+          $vcRuntimeHashes = if ($env:PACKAGE_ARCH -eq 'arm64') { Get-ChildItem 'node_modules/sherpa-onnx-win-arm64/vc-runtime' -Filter '*.dll' -File | ForEach-Object { [ordered]@{ file=$_.Name; sha256=(Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant() } } } else { @() }
+          $provenance = [ordered]@{ sourceCommit=$env:RELEASE_SHA; version='0.2.2'; arch=$env:PACKAGE_ARCH; installerSha256=$hash; modelManifestSha256=(Get-FileHash -Algorithm SHA256 'src/main/services/local-asr/model-store.ts').Hash.ToLowerInvariant(); signing='unsigned'; vcRuntimeProvenance=$vcRuntime; vcRuntimeFiles=$vcRuntimeHashes }
           $provenance | ConvertTo-Json | Set-Content (Join-Path $output 'BUILD-PROVENANCE.json') -Encoding utf8
           Set-Content (Join-Path $output "SHA256SUMS-Windows-$env:PACKAGE_ARCH.txt") -Value $lines -Encoding utf8NoBOM
       - name: Retain Windows installer and verification records

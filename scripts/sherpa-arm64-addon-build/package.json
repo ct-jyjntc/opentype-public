@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Pinned build tools for the Windows ARM64 sherpa-onnx Node-API addon",
   "dependencies": {
-    "cmake-js": "7.3.1",
+    "cmake-js": "7.4.0",
     "node-addon-api": "8.3.0"
   }
 }

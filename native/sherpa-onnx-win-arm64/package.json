@@ -10,8 +10,11 @@
   "files": [
     "sherpa-onnx.node",
     "*.dll",
+    "vc-runtime/**/*",
     "LICENSE.sherpa-onnx",
     "LICENSE.onnxruntime",
+    "VC-RUNTIME-NOTICE.txt",
+    "VC-RUNTIME-PROVENANCE.txt",
     "BUILD-PROVENANCE.json"
   ]
 }
