@@ -112,14 +112,19 @@ jobs:
           if ($digest -ne '799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46') { throw 'LibriSpeech oracle WAV hash mismatch.' }
           $asrScript = Join-Path $taskDir 'verify-packaged-asr.cjs'
           $asrSource = @'
-          const path = require('node:path'), { createRequire } = require('node:module');
+          const path = require('node:path'), fs = require('node:fs'), { createRequire } = require('node:module');
           (async () => {
             const [wav, expectedArch] = process.argv.slice(2);
+            const resultPath = process.env.OPENTYPE_ASR_RESULT;
+            if (!resultPath) throw Error('OPENTYPE_ASR_RESULT is required');
             if (process.platform !== 'win32' || process.arch !== expectedArch) throw Error(`wrong runtime ${process.platform}/${process.arch}`);
             const fromApp = createRequire(path.join(process.resourcesPath, 'app.asar', 'dist/main/sensevoice-worker.js'));
             const Database = fromApp('better-sqlite3');
-            const db = new Database(':memory:'); db.prepare('select 1').get(); db.close();
+            const db = new Database(':memory:');
+            const sqliteProbe = db.prepare('select 1 as value').get(); db.close();
+            if (sqliteProbe.value !== 1) throw Error('better-sqlite3 query returned an unexpected result');
             const koffi = fromApp('koffi');
+            if (typeof koffi.version !== 'string' || !koffi.version) throw Error('Koffi did not report its loaded version');
             const sherpa = fromApp('sherpa-onnx-node');
             const { OfflineRecognizer } = sherpa;
             const { samples, sampleRate } = sherpa.readWave(wav, false);
@@ -136,16 +141,21 @@ jobs:
             const a = norm(text), b = norm(reference), row = Array.from({length:b.length+1}, (_,i)=>i);
             for(let i=1;i<=a.length;i++){let prev=row[0];row[0]=i;for(let j=1;j<=b.length;j++){const old=row[j];row[j]=Math.min(row[j]+1,row[j-1]+1,prev+(a[i-1]===b[j-1]?0:1));prev=old}}
             const wer = row[b.length] / b.length;
-            console.log(JSON.stringify({platform:process.platform,arch:process.arch,electron:process.versions.electron,nodeAbi:process.versions.modules,sqlite:'loaded',koffi:typeof koffi.version === 'string' ? koffi.version : 'loaded',text,reference,wer},null,2));
+            const report = {platform:process.platform,arch:process.arch,electron:process.versions.electron,nodeAbi:process.versions.modules,sqliteQueryValue:sqliteProbe.value,koffiVersion:koffi.version,text,reference,wer};
+            fs.writeFileSync(resultPath, JSON.stringify(report, null, 2), { flag: 'wx' });
+            console.log(JSON.stringify(report,null,2));
             if(wer>0.25) throw Error(`local SenseVoice WER ${wer.toFixed(3)} exceeds 0.25`);
             recognizer.free?.();
           })().catch(error => { console.error(error); process.exitCode=1 });
           '@
           Set-Content -Path $asrScript -Value $asrSource -Encoding utf8NoBOM
           $output = Join-Path 'release/staging/0.2.2' "windows-$env:PACKAGE_ARCH"
-          $unpackedExe = Join-Path $output 'win-unpacked/OpenType.exe'
-          if (-not (Test-Path $unpackedExe)) { throw 'electron-builder did not produce the unpacked packaged Electron application.' }
-          $addon = Join-Path $output "win-unpacked/resources/app.asar.unpacked/node_modules/sherpa-onnx-win-$env:PACKAGE_ARCH/sherpa-onnx.node"
+          $unpackedDirName = if ($env:PACKAGE_ARCH -eq 'arm64') { 'win-arm64-unpacked' } else { 'win-unpacked' }
+          $unpackedRoot = Join-Path $output $unpackedDirName
+          Write-Host "Electron Builder unpacked directory for $env:PACKAGE_ARCH`: $unpackedRoot"
+          $unpackedExe = Join-Path $unpackedRoot 'OpenType.exe'
+          if (-not (Test-Path $unpackedExe)) { throw "electron-builder did not produce the $env:PACKAGE_ARCH unpacked packaged Electron application at $unpackedExe." }
+          $addon = Join-Path $unpackedRoot "resources/app.asar.unpacked/node_modules/sherpa-onnx-win-$env:PACKAGE_ARCH/sherpa-onnx.node"
           if (-not (Test-Path $addon)) { throw "Packaged ASR addon is missing: $addon" }
           $installDir = [IO.Path]::GetFullPath((Join-Path 'tmp' 'release-${{ github.run_id }}/installed-${{ matrix.arch }}'))
           $installer = Join-Path $output "OpenType-0.2.2-Windows-$env:PACKAGE_ARCH.exe"
@@ -154,8 +164,26 @@ jobs:
           $appExe = Join-Path $installDir 'OpenType.exe'
           if (-not (Test-Path $appExe)) { throw 'The NSIS installer did not install the packaged app executable at the requested path.' }
           $env:ELECTRON_RUN_AS_NODE = '1'
-          & $appExe $asrScript $fixture $env:PACKAGE_ARCH
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $resultFile = [IO.Path]::GetFullPath((Join-Path $taskDir "installed-asr-$env:PACKAGE_ARCH.json"))
+          $stdoutLog = [IO.Path]::GetFullPath((Join-Path $taskDir "installed-asr-$env:PACKAGE_ARCH.stdout.txt"))
+          $stderrLog = [IO.Path]::GetFullPath((Join-Path $taskDir "installed-asr-$env:PACKAGE_ARCH.stderr.txt"))
+          foreach ($path in @($resultFile, $stdoutLog, $stderrLog)) { if (Test-Path $path) { throw "Refusing to reuse prior ASR result or log: $path" } }
+          $env:OPENTYPE_ASR_RESULT = $resultFile
+          $electronArgs = @('"' + [IO.Path]::GetFullPath($asrScript) + '"', '"' + [IO.Path]::GetFullPath($fixture) + '"', $env:PACKAGE_ARCH)
+          $child = Start-Process -FilePath $appExe -ArgumentList $electronArgs -WorkingDirectory $installDir -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+          $finished = $child.WaitForExit(120000)
+          if (-not $finished) { Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue; throw "Installed Electron ASR process timed out (PID $($child.Id)); stdout=$stdoutLog stderr=$stderrLog" }
+          $child.Refresh()
+          $stdoutText = if (Test-Path $stdoutLog) { Get-Content $stdoutLog -Raw } else { '' }
+          $stderrText = if (Test-Path $stderrLog) { Get-Content $stderrLog -Raw } else { '' }
+          Write-Host "Installed Electron ASR exit=$($child.ExitCode) stdout=$stdoutText stderr=$stderrText"
+          if ($child.ExitCode -ne 0) { throw "Installed Electron ASR exited with code $($child.ExitCode)." }
+          if (-not (Test-Path $resultFile)) { throw 'Installed Electron ASR exited without a fresh JSON result.' }
+          $asrResult = Get-Content $resultFile -Raw | ConvertFrom-Json
+          Write-Host "Installed Electron ASR result=$($asrResult | ConvertTo-Json -Compress)"
+          if ($asrResult.platform -ne 'win32' -or $asrResult.arch -ne $env:PACKAGE_ARCH -or $asrResult.electron -ne '33.4.11' -or $asrResult.nodeAbi -ne '130') { throw 'Installed Electron ASR runtime platform, architecture, version, or ABI did not match the release target.' }
+          if ($asrResult.sqliteQueryValue -ne 1 -or $asrResult.koffiVersion -ne '2.16.3') { throw 'Installed SQLite/Koffi runtime probes did not return their expected values.' }
+          if ([string]::IsNullOrWhiteSpace($asrResult.text) -or $asrResult.reference -ne 'MISTER QUILTER IS THE APOSTLE OF THE MIDDLE CLASSES AND WE ARE GLAD TO WELCOME HIS GOSPEL' -or $null -eq $asrResult.wer -or [double]$asrResult.wer -gt 0.25) { throw 'Installed SenseVoice result is empty, references the wrong oracle, or exceeded the WER limit.' }
       - name: Verify PE architectures, NSIS package, update feed, and checksums
         shell: pwsh
         env:
@@ -164,19 +192,23 @@ jobs:
           SENSEVOICE_MODEL_DIR: tmp/release-${{ github.run_id }}/models/sensevoice-int8
         run: |
           $output = Join-Path 'release/staging/0.2.2' "windows-$env:PACKAGE_ARCH"
+          $unpackedDirName = if ($env:PACKAGE_ARCH -eq 'arm64') { 'win-arm64-unpacked' } else { 'win-unpacked' }
+          $unpackedRoot = Join-Path $output $unpackedDirName
+          Write-Host "Verifying Electron Builder $env:PACKAGE_ARCH output directory: $unpackedRoot"
+          if (-not (Test-Path (Join-Path $unpackedRoot 'OpenType.exe'))) { throw "Electron Builder $env:PACKAGE_ARCH app executable is missing: $unpackedRoot" }
           $installer = Get-ChildItem $output -Filter "OpenType-0.2.2-Windows-$env:PACKAGE_ARCH.exe" -File | Select-Object -First 1
           if (-not $installer) { throw 'Architecture-specific NSIS installer was not produced.' }
           if (-not (Test-Path (Join-Path $output 'latest.yml'))) { throw 'Stable latest.yml was not produced.' }
           $peMachine = { param($path) $bytes = [IO.File]::ReadAllBytes($path); $offset = [BitConverter]::ToInt32($bytes, 0x3c); if ($bytes[$offset] -ne 0x50 -or $bytes[$offset + 1] -ne 0x45 -or $bytes[$offset + 2] -ne 0 -or $bytes[$offset + 3] -ne 0) { throw "Invalid PE file: $path" }; [BitConverter]::ToUInt16($bytes, $offset + 4) }
           $expectedMachine = if ($env:PACKAGE_ARCH -eq 'arm64') { 0xAA64 } else { 0x8664 }
-          $nativeFiles = @(Get-ChildItem (Join-Path $output 'win-unpacked/resources/app.asar.unpacked') -File -Recurse | Where-Object {
+          $nativeFiles = @(Get-ChildItem (Join-Path $unpackedRoot 'resources/app.asar.unpacked') -File -Recurse | Where-Object {
             if ($_.Extension -in @('.dll','.exe')) { return $true }
             if ($_.Extension -ne '.node') { return $false }
             if ($_.FullName -match '[\\/]koffi[\\/]build[\\/]koffi[\\/]') { return $_.FullName -match "[\\/]win32_$env:PACKAGE_ARCH[\\/]koffi\.node$" }
             return $true
           } | ForEach-Object FullName)
-          $nativeFiles += @((Join-Path $output 'win-unpacked/OpenType.exe'), (Join-Path $output 'win-unpacked/resources/lib/windows/build/OpenTypeNative.dll'), (Join-Path $output 'win-unpacked/resources/lib/windows/build/OutputAudio.exe'), (Join-Path $output 'win-unpacked/resources/lib/windows/build/ClipboardGuard.exe'))
-          $nativeFiles += @(Get-ChildItem (Join-Path $output 'win-unpacked') -Filter '*.dll' -File | ForEach-Object FullName)
+          $nativeFiles += @((Join-Path $unpackedRoot 'OpenType.exe'), (Join-Path $unpackedRoot 'resources/lib/windows/build/OpenTypeNative.dll'), (Join-Path $unpackedRoot 'resources/lib/windows/build/OutputAudio.exe'), (Join-Path $unpackedRoot 'resources/lib/windows/build/ClipboardGuard.exe'))
+          $nativeFiles += @(Get-ChildItem $unpackedRoot -Filter '*.dll' -File | ForEach-Object FullName)
           foreach ($path in $nativeFiles) {
             if (-not (Test-Path $path)) { throw "Packaged native binary is missing: $path" }
             $machine = & $peMachine $path
@@ -191,7 +223,7 @@ jobs:
             }
             $installedDir = Join-Path 'tmp' 'release-${{ github.run_id }}/installed-arm64'
             foreach ($runtimeDll in $runtimeDlls) {
-              $packagedRuntime = Join-Path $output "win-unpacked/$($runtimeDll.Name)"
+              $packagedRuntime = Join-Path $unpackedRoot $runtimeDll.Name
               $installedRuntime = Join-Path $installedDir $runtimeDll.Name
               foreach ($runtimePath in @($packagedRuntime, $installedRuntime)) {
                 if (-not (Test-Path $runtimePath)) { throw "App-local ARM64 VC runtime is missing beside OpenType.exe: $runtimePath" }
