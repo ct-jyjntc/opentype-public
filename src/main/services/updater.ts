@@ -315,12 +315,14 @@ class DesktopUpdater {
       : `上次更新未完成：${reason}，已保留当前版本。` })
   }
   private async prepareMacInstall(update: UpdateDownloadedEvent) {
-    const files = this.checked?.updateInfo.files ?? []
-    const zip = files.find(file => file.url.toLowerCase().endsWith('.zip'))
-    if (!zip?.sha512) throw new Error('发布元数据缺少 ZIP 的 SHA-512 校验值')
+    const zips = (this.checked?.updateInfo.files ?? []).filter(file => file.url.toLowerCase().endsWith('.zip') && file.sha512)
+    if (!zips.length) throw new Error('发布元数据缺少 ZIP 的 SHA-512 校验值')
     const downloaded = update.downloadedFile
     if (!downloaded || !existsSync(downloaded)) throw new Error('找不到已下载的更新 ZIP')
-    if (await sha512(downloaded) !== zip.sha512) throw new Error('更新 ZIP 的 SHA-512 校验失败')
+    // The feed lists one ZIP per architecture; match the one electron-updater chose for this Mac.
+    const actual = await sha512(downloaded)
+    const zip = zips.find(file => file.sha512 === actual)
+    if (!zip) throw new Error('更新 ZIP 的 SHA-512 校验失败')
     const { appRoot, parentPath } = await macAppRoot()
     const identity = this.currentIdentity ?? await signatureIdentity(appRoot)
     const currentInfo = await appInfo(appRoot)

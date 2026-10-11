@@ -52,7 +52,8 @@ async function readFeed(platform, arch) {
 
 const channels = [
   { platform: 'windows', name: 'latest.yml', arches: ['x64', 'arm64'] },
-  { platform: 'macos', name: 'latest-mac.yml', arches: ['x64', 'arm64'] },
+  // arm64 first: OpenType <= 0.2.2 verified the first ZIP in latest-mac.yml, and every installed Mac build before 0.2.2 is arm64.
+  { platform: 'macos', name: 'latest-mac.yml', arches: ['arm64', 'x64'] },
 ]
 
 for (const channel of channels) {
