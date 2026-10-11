@@ -52,13 +52,16 @@ async function readFeed(platform, arch) {
 
 const channels = [
   { platform: 'windows', name: 'latest.yml', arches: ['x64', 'arm64'] },
-  // arm64 first: OpenType <= 0.2.2 verified the first ZIP in latest-mac.yml, and every installed Mac build before 0.2.2 is arm64.
+  // arm64 first: builds before 0.2.2 verify the first ZIP in latest-mac.yml, and every Mac build before 0.2.2 is arm64.
   { platform: 'macos', name: 'latest-mac.yml', arches: ['arm64', 'x64'] },
 ]
 
 for (const channel of channels) {
   const parts = await Promise.all(channel.arches.map(arch => readFeed(channel.platform, arch)))
   const merged = { ...parts[0].feed, files: parts.flatMap(part => part.files) }
+  if (channel.platform === 'macos' && !String(merged.files.find(item => /\.zip$/.test(item.url ?? ''))?.url).endsWith('-macOS-arm64.zip')) {
+    throw new Error(`${channel.name} must list the arm64 ZIP first for installed builds before 0.2.2`)
+  }
   if (new Set(merged.files.map(item => item.url ?? item.path)).size !== merged.files.length) {
     throw new Error(`${channel.name} contains duplicate asset names`)
   }
