@@ -53,7 +53,8 @@ bool parseContextSide(const std::string& input,size_t& at,ContextSide& side){
   while(at<input.size()&&input[at]!='}'){
     std::string key,bytes;if(!parseJSONString(input,at,key))return false;skipJSONSpace(input,at);
     if(at>=input.size()||input[at++]!=':')return false;if(!parseJSONString(input,at,bytes))return false;
-    std::wstring value;try{value=ot::wide(bytes);}catch(...){return false;}
+    if(bytes.find('\0')!=std::string::npos)return false;
+    std::wstring value;try{value=ot::wide(bytes.c_str());}catch(...){return false;}
     if(key=="original"&&!original){side.original=std::move(value);original=true;}
     else if(key=="replacement"&&!replacement){side.replacement=std::move(value);replacement=true;}
     else return false;
