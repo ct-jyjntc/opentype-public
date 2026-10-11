@@ -11,6 +11,7 @@ import { app, screen, systemPreferences } from 'electron'
 import { createKeyboardMonitor } from './keyboard'
 import type { InputDeliveryNative, InputSnapshot } from '../services/input-delivery'
 import type { InputObservationNative } from '../services/input-corrections'
+import type { ContextEdit } from '../services/providers/types'
 export type { KeyEvent } from './keyboard'
 
 /** 原生库根目录：开发态在 native/，打包后随 resources 一起分发。 */
@@ -59,6 +60,9 @@ const _inputTargetDiagnostics = process.platform === 'darwin' ? inputLib.func('i
 const traces = new Map<string, string>()
 const _inputTargetReady = inputLib.func('inputTargetReady', voidPtr, [str])
 const _commitInputTarget = inputLib.func('commitInputTarget', voidPtr, [str, str])
+let _commitInputTargetWithContextEdit: ReturnType<koffi.IKoffiLib['func']> | undefined
+try { _commitInputTargetWithContextEdit = inputLib.func('commitInputTargetWithContextEdit', voidPtr, [str, str, str]) }
+catch { /* Older native helpers retain plain delivery until rebuilt. */ }
 const _verifyInputTarget = inputLib.func('verifyInputTarget', voidPtr, [str])
 const _releaseInputTarget = inputLib.func('releaseInputTarget', 'void', [str])
 const _beginInputObservation = inputLib.func('beginInputObservation', voidPtr, [str, str])
@@ -150,7 +154,24 @@ function deliveryDiagnostic(token: string, stage: string, result: Record<string,
 export const InputDelivery: InputDeliveryNative = {
   prepare: async token => { deliveryDiagnostic(token, 'prepare-start', {}); try { const result = await asyncDelivery(_prepareInputTarget, token); deliveryDiagnostic(token, 'prepare-result', result); return result } catch (error) { deliveryDiagnostic(token, 'prepare-bridge', { reason: 'injection_prepare_bridge_failed' }); throw new Error('injection_prepare_bridge_failed') } },
   ready: token => { try { const result = deliveryJSON(_inputTargetReady(token)); deliveryDiagnostic(token, 'ready', result); return result } catch (error) { deliveryDiagnostic(token, 'ready-bridge', { reason: 'injection_ready_bridge_failed' }); throw new Error('injection_ready_bridge_failed') } },
-  commit: async (token, text) => { deliveryDiagnostic(token, 'commit-start', {}); try { const result = await asyncDelivery(_commitInputTarget, token, text); deliveryDiagnostic(token, 'commit-result', result); return result } catch (error) { deliveryDiagnostic(token, 'commit-bridge', { reason: 'injection_commit_bridge_failed' }); throw error } },
+  commit: async (token, text, contextEdit?: ContextEdit) => {
+    deliveryDiagnostic(token, 'commit-start', { context_edit_requested: !!contextEdit })
+    try {
+      let result: any
+      if (contextEdit) {
+        if (!_commitInputTargetWithContextEdit) {
+          result = { submitted: false, reason: 'injection_context_edit_unsupported',
+            contextEditApplied: false, contextEditReason: 'unsupported' }
+        } else {
+          result = await asyncDelivery(_commitInputTargetWithContextEdit, token, text, JSON.stringify(contextEdit))
+        }
+      } else {
+        result = await asyncDelivery(_commitInputTarget, token, text)
+      }
+      deliveryDiagnostic(token, 'commit-result', result)
+      return result
+    } catch (error) { deliveryDiagnostic(token, 'commit-bridge', { reason: 'injection_commit_bridge_failed' }); throw error }
+  },
   verify: token => { try { const result = deliveryJSON(_verifyInputTarget(token)); deliveryDiagnostic(token, 'verify', result); return result } catch (error) { deliveryDiagnostic(token, 'verify-bridge', { reason: 'injection_verify_bridge_failed' }); throw error } },
 }
 

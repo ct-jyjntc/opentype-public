@@ -23,12 +23,21 @@ export interface TranscribeParams {
   isRetry?: boolean
   signal?: AbortSignal
   onProgress?: (progress: ProcessingProgress) => void
+  /** Only live captures with a frozen, readable native target may edit adjacent context. */
+  allowContextEdit?: boolean
+}
+
+export interface ContextEdit {
+  before?: { original: string; replacement: string }
+  after?: { original: string; replacement: string }
 }
 
 export interface TranscribeResult {
   success: boolean
   /** 最终文本（已润色，若有润色环节） */
   text?: string
+  /** Optional punctuation/spacing edits adjacent to a live captured insertion point. */
+  contextEdit?: ContextEdit
   /** ASR 原始输出，用于对照与重试 */
   rawText?: string
   /**

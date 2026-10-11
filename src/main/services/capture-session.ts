@@ -5,7 +5,7 @@ import { encodeWav } from './pcm'
 import { RendererVoiceService } from './renderer-voice'
 import { applyOutputPreferences } from './output-format'
 import type { DeliveryOutcome } from './input-delivery'
-import type { LiveTranscription, SpeechProvider, TranscribeParams, TranscribeResult } from './providers/types'
+import type { ContextEdit, LiveTranscription, SpeechProvider, TranscribeParams, TranscribeResult } from './providers/types'
 import type { HistoryInsert, HistoryRow } from '../db'
 import type { CaptureMode, VoiceState } from '../../shared/desktop'
 export interface CaptureSettings {
@@ -66,6 +66,7 @@ export interface CaptureSessionDeps {
     text: string,
     target: CaptureTarget,
     signal: AbortSignal,
+    contextEdit?: ContextEdit,
   ) => Promise<DeliveryOutcome | void>
   releaseTarget?: (target: CaptureTarget) => void
   observeInput?: (id: string, text: string, target: CaptureTarget) => boolean
@@ -285,6 +286,11 @@ export class CaptureSession {
         duration,
         audioMetadata: { audio_duration: duration, audio_format: 'wav' },
         audioContext: s.target.audioContext,
+        allowContextEdit: s.settings.mode === 'voice_transcript'
+          && Boolean(s.target.inputToken)
+          && s.target.audioContext.redacted !== true
+          && [s.target.audioContext.input_context_before, s.target.audioContext.input_context_after]
+            .some(value => typeof value === 'string' && value.length > 0),
         parameters: {
           language: s.settings.asrLanguage,
           output_language: s.settings.outputLanguage,
@@ -334,14 +340,18 @@ export class CaptureSession {
         else if (s.settings.autoInject && result.delivery !== 'external') {
           notify('injecting', undefined, result.text)
           let delivered: DeliveryOutcome | void
+          const contextEdit = s.settings.mode === 'voice_transcript'
+            && Boolean(s.target.inputToken) && s.target.audioContext.redacted !== true
+            ? result.contextEdit : undefined
           try {
-            delivered = await this.deps.inject(result.text, s.target, signal)
+            delivered = await this.deps.inject(result.text, s.target, signal, contextEdit)
           } catch (error) {
             signal.throwIfAborted()
             result.detail = (error as Error).message || 'injection_failed'
             result.delivery = 'manual'
             await this.deps.saveHistory({ id: s.id, status: 'completed',
-              modeMeta: JSON.stringify({ ...meta, raw_text: result.rawText ?? '', delivery: 'manual', input_delivery: 'failed' }),
+              modeMeta: JSON.stringify({ ...meta, raw_text: result.rawText ?? '', delivery: 'manual', input_delivery: 'failed',
+                ...(contextEdit ? { context_edit_applied: false, context_edit_reason: (error as Error).message || 'delivery_failed' } : {}) }),
               debugInfo: JSON.stringify({ detail: result.detail }), updatedAt: new Date().toISOString() })
             signal.throwIfAborted()
             this.deps.showFallback?.(result.text, s.id)
@@ -355,7 +365,11 @@ export class CaptureSession {
             try {
               await this.deps.saveHistory({ id: s.id, status: 'completed',
                 modeMeta: JSON.stringify({ ...meta, raw_text: result.rawText ?? '', delivery: result.delivery,
-                  input_delivery: delivered.status, input_method: delivered.method }),
+                  input_delivery: delivered.status, input_method: delivered.method,
+                  ...(result.contextEdit ? {
+                    context_edit_applied: typeof delivered.contextEditApplied === 'boolean' ? delivered.contextEditApplied : null,
+                    ...(delivered.contextEditReason ? { context_edit_reason: delivered.contextEditReason } : {}),
+                  } : {}) }),
                 debugInfo: JSON.stringify({ detail: result.detail }), updatedAt: new Date().toISOString() })
               if (delivered.status === 'verified' && s.settings.mode === 'voice_transcript' && !signal.aborted)
                 s.targetTransferred = this.deps.observeInput?.(s.id, result.text, s.target) === true

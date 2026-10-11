@@ -968,12 +968,13 @@ function createVoicePipeline(): CaptureSession {
     saveAudio: (id, data) => historyLifecycle.saveAudio(id, 'wav', data),
     saveHistory: record=>HistoryRepo.upsert(record),
     loadHistory: id=>HistoryRepo.byId(id),
-    inject: async (text, target, signal) => {
+    inject: async (text, target, signal, contextEdit) => {
       const traceId = target.inputTraceId ?? ''
       recordInputDiagnostic(traceId, 'delivery-start')
       try {
-        const result = await deliverToInput(InputDelivery, { token: target.inputToken, reason: target.inputError }, text, signal)
-        recordInputDiagnostic(traceId, 'delivery-result', { status: result.status, method: result.method, reason: result.detail })
+        const result = await deliverToInput(InputDelivery, { token: target.inputToken, reason: target.inputError }, text, signal, contextEdit)
+        recordInputDiagnostic(traceId, 'delivery-result', { status: result.status, method: result.method, reason: result.detail,
+          context_edit_applied: result.contextEditApplied, context_edit_reason: result.contextEditReason })
         return result
       } catch (error) {
         recordInputDiagnostic(traceId, 'delivery-failed', { reason: inputDiagnosticReason((error as Error).message) })
