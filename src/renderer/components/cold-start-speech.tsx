@@ -65,13 +65,13 @@ export function ColdStartSpeech({ reason, detail, onDismiss, onEnabledLocal }: P
     })
     if (!mountedRef.current) return
     if (result.outcome === 'cancelled') {
-      setMessage('已取消，仍使用云端。')
+      setMessage('已取消，识别方式未更改。')
       setBusy(false)
       return
     }
     if (result.outcome !== 'ready') {
       setFailed(true)
-      setMessage(errorMessage(result.error || result.status?.error || '模型准备失败'))
+      setMessage(`${errorMessage(result.error || result.status?.error || '模型准备失败').replace(/。$/, '')}。识别方式未更改。`)
       setBusy(false)
       return
     }
@@ -83,7 +83,7 @@ export function ColdStartSpeech({ reason, detail, onDismiss, onEnabledLocal }: P
     } catch (error) {
       if (mountedRef.current) {
         setFailed(true)
-        setMessage(errorMessage(error))
+        setMessage(`${errorMessage(error).replace(/。$/, '')}。识别方式未更改。`)
       }
     } finally {
       if (mountedRef.current) setBusy(false)
@@ -95,13 +95,13 @@ export function ColdStartSpeech({ reason, detail, onDismiss, onEnabledLocal }: P
     setMessage('正在取消…')
     try { await cancelLocalAsrInstall() }
     catch (error) {
-      if (mountedRef.current) { setFailed(true); setMessage(errorMessage(error)) }
+      if (mountedRef.current) { setFailed(true); setMessage(`${errorMessage(error).replace(/。$/, '')}。识别方式未更改。`) }
     }
   }
 
   const openKeySettings = () => {
     // Secondary CTA: open speech settings focused on Key; do not install or change provider.
-    void window.opentype.desktop.openSpeechSettings()
+    void window.opentype.desktop.openSpeechSettings('siliconflow-key')
     onDismiss()
   }
 
