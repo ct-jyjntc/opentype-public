@@ -750,8 +750,13 @@ function prepareLocalModels() {
 }
 let skillActions: ReturnType<typeof registerSkillActions> | undefined
 let speechSettingsWindow: BrowserWindow | null = null
-function showSpeechSettings() {
-  if (speechSettingsWindow && !speechSettingsWindow.isDestroyed()) { speechSettingsWindow.show(); return }
+function showSpeechSettings(focus?: 'siliconflow-key') {
+  const focusKey = focus === 'siliconflow-key'
+  if (speechSettingsWindow && !speechSettingsWindow.isDestroyed()) {
+    speechSettingsWindow.show()
+    if (focusKey) speechSettingsWindow.webContents.send('speech-settings:focus-key')
+    return
+  }
   speechSettingsWindow = new BrowserWindow({ width: 780, height: 840, minWidth: 620, minHeight: 640,
     icon: join(app.getAppPath(), 'build/icon.png'),
     title: 'OpenType 听写设置', backgroundColor: '#f5f7f4',
@@ -761,7 +766,10 @@ function showSpeechSettings() {
   speechSettingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   speechSettingsWindow.webContents.on('will-navigate', event => event.preventDefault())
   speechSettingsWindow.on('closed', () => { speechSettingsWindow = null })
-  void speechSettingsWindow.loadFile(join(__dirname, '../renderer/speech-settings.html'))
+  void speechSettingsWindow.loadFile(
+    join(__dirname, '../renderer/speech-settings.html'),
+    focusKey ? { hash: 'siliconflow-api-key' } : undefined,
+  )
 }
 function buildProvider(): SpeechProvider {
   const c = getConfig()
@@ -2033,7 +2041,9 @@ function registerIpc(): void {
     broadcastProviderChanged(provider)
     return publicConfig
   })
-  ipcMain.handle('desktop:open-speech-settings', () => { showSpeechSettings() })
+  ipcMain.handle('desktop:open-speech-settings', (_e, focus?: unknown) => {
+    showSpeechSettings(focus === 'siliconflow-key' ? 'siliconflow-key' : undefined)
+  })
   ipcMain.handle('desktop:open-hub', (_e, page?: unknown) => {
     openHubPage(typeof page === 'string' ? page : undefined)
   })
@@ -2239,7 +2249,7 @@ function refreshTrayMenu(): void {
   }
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开主界面', click: () => { mainWindow ??= createMainWindow(); mainWindow.show() } },
-    { label: '听写模型与 DeepSeek 设置', click: showSpeechSettings },
+    { label: '听写模型与 DeepSeek 设置', click: () => showSpeechSettings() },
     { label: '当前 Skill', enabled: p.skills.enabled, submenu: [
       { label: '按场景自动选择', type: 'radio', checked: p.skills.selected === 'auto', click: () => selectSkill('auto') },
       { label: '不使用 Skill', type: 'radio', checked: p.skills.selected === 'none', click: () => selectSkill('none') },

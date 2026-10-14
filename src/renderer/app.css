@@ -1888,6 +1888,17 @@ button.about-link svg { flex-shrink: 0; }
 .asr-field-meta.ready { color: var(--ok); font-weight: 600; }
 .asr-field-meta.pending { color: var(--warn); font-weight: 600; }
 .asr .text-button.strong { color: var(--text); font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+@keyframes asr-key-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 12%, transparent); }
+}
+.asr-field.asr-field-highlight input,
+.asr-field input.asr-key-highlight {
+  border-color: var(--accent);
+  background: var(--card);
+  animation: asr-key-pulse 1.2s ease-in-out 2;
+}
+
 
 /* ── Account & update (2026-10) ─────────────────────────────── */
 button.link { border: 0; background: none; padding: 0 2px; min-height: 0; color: var(--text); font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }

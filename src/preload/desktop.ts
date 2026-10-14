@@ -80,8 +80,9 @@ export const desktop = {
   completeOnboarding: () => invoke<void>('desktop:complete-onboarding'),
   copy: (text: string) => invoke<void>('clipboard:write-text', text),
   openUrl: (url: string) => invoke<void>('desktop:open-url', url),
-  /** Opens the dedicated speech-settings window (Key field for cloud). */
-  openSpeechSettings: () => invoke<void>('desktop:open-speech-settings'),
+  /** Opens the dedicated speech-settings window; pass 'siliconflow-key' to focus the cloud Key field. */
+  openSpeechSettings: (focus?: 'siliconflow-key') => invoke<void>('desktop:open-speech-settings', focus),
+  onSpeechSettingsFocusKey: (cb: () => void) => watch('speech-settings:focus-key', cb),
   /** Bring the hub forward; optional page id e.g. "history". */
   openHub: (page?: string) => invoke<void>('desktop:open-hub', page),
   setBarExpanded: (expanded: boolean) => invoke<void>('page:floating-bar-set-expanded', expanded),
