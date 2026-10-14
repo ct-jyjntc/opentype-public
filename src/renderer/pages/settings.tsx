@@ -741,6 +741,7 @@ function About() {
           : <button disabled={busy} onClick={() => void change(() => api.desktop.updater.check(update.channel))}>{update.phase === 'checking' ? '正在检查…' : '检查更新'}</button>}
       </div>
       {update.phase === 'ready' && <p className="about-note">安装会关闭应用并重启，请先保存尚未保留的文字。</p>}
+      {api.platform === 'darwin' && <p className="about-note">临时签名包更新后，系统可能再次要求授权麦克风、输入监控或辅助功能。正式公证版若由同一开发者团队签名，权限通常会保持；若仍提示，按系统引导重授即可。</p>}
       {update.releaseNotes && <details className="about-notes"><summary>版本说明 · {update.version}</summary><Markdown text={update.releaseNotes} /></details>}
       {error && <p className="inline-error" role="alert">{error}</p>}
       <div className="about-row">
@@ -767,6 +768,9 @@ function Help() {
     ]],
     ['遇到问题', [
       ['失败后怎样找回内容？', '在历史记录里打开那一条，可以重放录音或重新识别。'],
+      ['更新后要重新开权限吗？', api.platform === 'darwin'
+        ? '临时签名包更新后，系统可能再次要求授权麦克风、输入监控或辅助功能。正式公证版若由同一开发者团队签名，权限通常会保持；若仍提示，按系统引导重授即可。'
+        : '一般不需要。若系统再次询问麦克风权限，在隐私设置里允许即可。'],
     ]],
   ]
   return (
