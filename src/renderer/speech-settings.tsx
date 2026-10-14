@@ -3,12 +3,6 @@ import type { AppleSpeechStatus } from '../main/services/providers/apple-speech'
 import type { ModelStatus } from '../main/services/local-asr/model-store'
 import { errorMessage } from '../shared/desktop'
 import { Icon, Toggle } from './components/ui'
-import {
-  busyModelState,
-  cancelLocalAsrInstall,
-  enableLocalRecognitionProvider,
-  runLocalAsrInstall,
-} from './local-asr-install'
 
 type SpeechProvider = 'siliconflow' | 'local' | 'openai' | 'custom' | 'apple'
 type SpeechConfig = { appleSpeechLanguage?: string; provider: SpeechProvider; enableRefine: boolean; hasRefineApiKey: boolean; hasSiliconflowApiKey: boolean }
@@ -40,9 +34,6 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
   const [conflict, setConflict] = useState(false)
   const conflictRef = useRef(false)
   const dirtyRef = useRef(false)
-  const cloudKeyInputRef = useRef<HTMLInputElement>(null)
-  const [keyHighlight, setKeyHighlight] = useState(false)
-  const [keyFocusToken, setKeyFocusToken] = useState(0)
   const dirty = appleLanguage !== savedAppleLanguage || provider !== savedProvider || enabled !== savedEnabled || !!key.trim() || !!cloudKey.trim() || clearKey || clearCloudKey
   dirtyRef.current = dirty
   const effectiveCloudKey = !!cloudKey.trim() || (hasCloudKey && !clearCloudKey)
@@ -80,41 +71,6 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     })
     return () => { active = false; mountedRef.current = false; cancelledRef.current = true; off() }
   }, [])
-  const pendingKeyFocusRef = useRef(
-    typeof location !== 'undefined' && location.hash === '#siliconflow-api-key',
-  )
-  const requestSiliconflowKeyFocus = () => {
-    pendingKeyFocusRef.current = true
-    if (!mountedRef.current) return
-    setMessage(''); setFailed(false)
-    setProvider('siliconflow')
-    setKeyHighlight(true)
-    setKeyFocusToken(value => value + 1)
-  }
-  /** Secondary CTA / hash: scroll+focus SiliconFlow API Key (UI only; no provider write). */
-  useEffect(() => {
-    if (pendingKeyFocusRef.current && typeof location !== 'undefined' && location.hash === '#siliconflow-api-key') {
-      history.replaceState(null, '', location.pathname + location.search)
-    }
-    const off = window.opentype.desktop.onSpeechSettingsFocusKey?.(requestSiliconflowKeyFocus)
-    return () => { off?.() }
-  }, [])
-  useEffect(() => {
-    if (!loaded || !pendingKeyFocusRef.current) return
-    requestSiliconflowKeyFocus()
-  }, [loaded])
-  useEffect(() => {
-    if (!keyFocusToken || !loaded || provider !== 'siliconflow' || !pendingKeyFocusRef.current) return
-    pendingKeyFocusRef.current = false
-    const el = cloudKeyInputRef.current
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      el.focus()
-    }
-    const timer = setTimeout(() => { if (mountedRef.current) setKeyHighlight(false) }, 2400)
-    return () => clearTimeout(timer)
-  }, [keyFocusToken, loaded, provider])
-
   const reload = async () => {
     setLoaded(false)
     try { applySaved(await window.opentype.config.get()); setFailed(false); setMessage('已重新载入保存的设置。') }
@@ -123,13 +79,12 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
   useEffect(() => {
     if (!loaded || provider !== 'local') return
     let active = true
-    const refresh = () => void window.opentype.localAsr.check()
+    const refresh = () => void window.opentype.localAsr.status()
       .then(value => { if (active) setStatus(value) })
       .catch(() => { if (active) { setFailed(true); setMessage('无法读取模型状态，请重新打开设置。') } })
     refresh()
-    const offState = window.opentype.localAsr.onState(value => { if (active) setStatus(value) })
     const interval = setInterval(refresh, 1000)
-    return () => { active = false; clearInterval(interval); offState() }
+    return () => { active = false; clearInterval(interval) }
   }, [loaded, provider])
   useEffect(() => {
     if (!loaded || provider !== 'apple') return
@@ -168,29 +123,23 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     changed()
     preparingRef.current = true; cancelledRef.current = false
     setPreparing(true)
+    setStatus(previous => ({ state: 'checking', downloaded: 0, total: previous?.total ?? 239549735 }))
     try {
-      const result = await runLocalAsrInstall({
-        onStatus: value => { if (mountedRef.current) setStatus(value) },
-        isCancelled: () => cancelledRef.current,
-      })
+      const result = await window.opentype.localAsr.install()
       if (!mountedRef.current) return
-      if (result.status) setStatus(result.status)
-      if (result.outcome === 'cancelled') { setMessage('已取消，识别方式未更改。'); return }
-      if (result.outcome !== 'ready') throw new Error(result.error || '模型尚未准备完成，请重试。')
+      setStatus(result)
+      if (cancelledRef.current) { setMessage('已取消，识别方式未更改。'); return }
+      if (result.state !== 'ready') throw new Error(result.error || '模型尚未准备完成，请重试。')
       if (conflictRef.current) { setMessage('模型已准备好。请重新载入设置后再启用。'); return }
       savingRef.current = true; setSaving(true)
-      // Unique write path: only after localAsr.check() === ready.
-      const saved = await enableLocalRecognitionProvider()
+      const saved = await window.opentype.config.set({ provider: 'local' })
       if (!mountedRef.current) return
+      // Enabling the model must not discard unrelated text/key drafts.
       setProvider(saved.provider); setSavedProvider(saved.provider)
       const otherChanges = enabled !== savedEnabled || !!key.trim() || !!cloudKey.trim() || clearKey || clearCloudKey
       setMessage(otherChanges ? '本地模型已启用，其他修改仍需保存。' : '本地模型已启用。')
     } catch (error) {
-      if (mountedRef.current) {
-        setFailed(true)
-        const msg = saveError(error)
-        setMessage(conflictRef.current ? msg : `${msg.replace(/。$/, '')}。识别方式未更改。`)
-      }
+      if (mountedRef.current) { setFailed(true); setMessage(saveError(error)) }
     } finally {
       preparingRef.current = false; savingRef.current = false
       if (mountedRef.current) { setPreparing(false); setSaving(false) }
@@ -199,7 +148,7 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
   const cancelDownload = async () => {
     cancelledRef.current = true
     setMessage('正在取消…')
-    try { if (provider === 'apple') await window.opentype.appleSpeech.cancel(); else await cancelLocalAsrInstall() }
+    try { if (provider === 'apple') await window.opentype.appleSpeech.cancel(); else await window.opentype.localAsr.cancel() }
     catch (error) { setFailed(true); setMessage(errorMessage(error)) }
   }
   /** Waits for the check still in flight instead of reporting "missing" while it runs. */
@@ -216,28 +165,17 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
   const save = async (): Promise<boolean> => {
     if (!loaded || conflict || savingRef.current || preparingRef.current) return false
     if (provider === 'apple' && !(await currentAppleStatus())?.installed) return false
-    // Local is not ready: do not write provider via config.set — force the download/enable path.
-    if (provider === 'local' && provider !== savedProvider && status?.state !== 'ready') {
-      setFailed(true); setMessage('请先准备本地模型，再保存。'); return false
-    }
     savingRef.current = true
     setSaving(true)
     changed()
     try {
-      const otherPatch = {
+      const result = await window.opentype.config.set({
+        ...(provider !== savedProvider ? { provider } : {}),
         ...(appleLanguage !== savedAppleLanguage ? { appleSpeechLanguage: appleLanguage } : {}),
         ...(enabled !== savedEnabled ? { enableRefine: enabled } : {}),
         ...(cloudKey.trim() ? { siliconflowApiKey: cloudKey.trim() } : clearCloudKey ? { siliconflowApiKey: '' } : {}),
         ...(key.trim() ? { refineApiKey: key.trim() } : clearKey ? { refineApiKey: '' } : {}),
-      }
-      let result
-      if (provider !== savedProvider) {
-        // Unique provider write path (local requires ready inside main). Never bare config:set for provider.
-        result = await window.opentype.speech.setRecognitionProvider(provider)
-        if (Object.keys(otherPatch).length) result = await window.opentype.config.set(otherPatch)
-      } else {
-        result = await window.opentype.config.set(otherPatch)
-      }
+      })
       applySaved(result)
       setMessage('已保存')
       return true
@@ -249,11 +187,8 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
   }
   const next = async () => {
     if (!loaded || conflict || savingRef.current || preparingRef.current) return
-    // N1: do not hard-block onboarding Continue when cloud has no Key —
-    // dictation entry owns the dual-CTA gate. Soft tip only.
     if (provider === 'siliconflow' && !effectiveCloudKey) {
-      setFailed(false)
-      setMessage('听写时再选：下载本地 INT8，或填写 Key 走云端。')
+      setFailed(true); setMessage('请填写云端 Key，或切换到本地并准备模型。'); return
     }
     if (provider === 'local' && status?.state !== 'ready') {
       setFailed(true); setMessage('请先准备本地模型，再继续。'); return
@@ -261,7 +196,7 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
     if (provider === 'apple' && !(await currentAppleStatus())?.installed) return
     if (!dirty || await save()) onDone?.()
   }
-  const busyModel = busyModelState(status)
+  const busyModel = status?.state === 'downloading' || status?.state === 'installing' || status?.state === 'checking'
   const providers: [SpeechProvider, string, string, string][] = [
     ['siliconflow', 'cloud', '云端', '免下载，需联网'],
     ['local', 'drive', '本地', '240 MB，离线'],
@@ -300,15 +235,13 @@ export function SpeechSettings({ embedded = false, onDone, onBack }: { embedded?
           ))}
         </div>
         {provider !== 'local' && provider !== 'siliconflow' && provider !== 'apple' && <p className="asr-note">正在使用旧的语音服务，选一种后保存即可切换。</p>}
-        {provider === 'siliconflow' && <label className={`asr-field${keyHighlight ? ' asr-field-highlight' : ''}`} htmlFor="siliconflow-api-key">
+        {provider === 'siliconflow' && <label className="asr-field">
           <span className="asr-field-head">SiliconFlow API Key
             {hasCloudKey && <span className="asr-field-meta">{clearCloudKey ? '保存后清除' : '已保存'}
               <button type="button" className="text-button" onClick={() => { changed(); setCloudKey(''); setClearCloudKey(!clearCloudKey) }}>{clearCloudKey ? '撤销' : '清除'}</button></span>}
           </span>
-          <input id="siliconflow-api-key" ref={cloudKeyInputRef} type="password" autoComplete="off" spellCheck={false} value={cloudKey} aria-invalid={!effectiveCloudKey}
-            className={keyHighlight ? 'asr-key-highlight' : undefined}
+          <input type="password" autoComplete="off" spellCheck={false} value={cloudKey} aria-invalid={!effectiveCloudKey}
             onChange={event => { changed(); setCloudKey(event.target.value); setClearCloudKey(false) }} placeholder={hasCloudKey ? '留空则不变' : '填上 Key 才能使用云端识别'} />
-          {!effectiveCloudKey && <p className="asr-note">无 Key 时可下载本地 INT8，或在此填写 Key；听写入口会提示双路径，不会自动切换。</p>}
         </label>}
         {provider === 'apple' && <>
           <label className="asr-field"><span className="asr-field-head">识别语言

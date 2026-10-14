@@ -35,7 +35,7 @@ import { capturedContext } from './services/capture-context'
 import { AnswerCardSession } from './services/answer-card'
 import { InputCorrections } from './services/input-corrections'
 import { analyzeInputCorrection } from './services/correction-intelligence'
-import { errorMessage, type CaptureMode, type CardPayload, type VoiceState } from '../shared/desktop'
+import { errorMessage, type CardPayload, type VoiceState } from '../shared/desktop'
 import { AudioEncoder } from './services/audio'
 import { HistoryRepo, DictionaryRepo, CorrectionRepo, initDatabase, closeDatabase } from './db'
 import { AuthService, type AuthUser } from './services/auth'
@@ -750,13 +750,8 @@ function prepareLocalModels() {
 }
 let skillActions: ReturnType<typeof registerSkillActions> | undefined
 let speechSettingsWindow: BrowserWindow | null = null
-function showSpeechSettings(focus?: 'siliconflow-key') {
-  const focusKey = focus === 'siliconflow-key'
-  if (speechSettingsWindow && !speechSettingsWindow.isDestroyed()) {
-    speechSettingsWindow.show()
-    if (focusKey) speechSettingsWindow.webContents.send('speech-settings:focus-key')
-    return
-  }
+function showSpeechSettings() {
+  if (speechSettingsWindow && !speechSettingsWindow.isDestroyed()) { speechSettingsWindow.show(); return }
   speechSettingsWindow = new BrowserWindow({ width: 780, height: 840, minWidth: 620, minHeight: 640,
     icon: join(app.getAppPath(), 'build/icon.png'),
     title: 'OpenType 听写设置', backgroundColor: '#f5f7f4',
@@ -766,10 +761,7 @@ function showSpeechSettings(focus?: 'siliconflow-key') {
   speechSettingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   speechSettingsWindow.webContents.on('will-navigate', event => event.preventDefault())
   speechSettingsWindow.on('closed', () => { speechSettingsWindow = null })
-  void speechSettingsWindow.loadFile(
-    join(__dirname, '../renderer/speech-settings.html'),
-    focusKey ? { hash: 'siliconflow-api-key' } : undefined,
-  )
+  void speechSettingsWindow.loadFile(join(__dirname, '../renderer/speech-settings.html'))
 }
 function buildProvider(): SpeechProvider {
   const c = getConfig()
@@ -940,39 +932,6 @@ function historyChanged() {
   mainWindow?.webContents.send('desktop:history-changed')
   sync.schedulePush()
 }
-/** N1: cloud default with no Key — block capture before the mic opens. */
-function needsColdStart(): boolean {
-  const config = getConfig()
-  return config.provider === 'siliconflow' && !config.siliconflowApiKey
-}
-function showColdStartGate(mode?: CaptureMode) {
-  const state: VoiceState = {
-    phase: 'error',
-    detail: 'siliconflow_key_required',
-    ...(mode ? { mode } : {}),
-  }
-  currentVoiceState = state
-  clearTimeout(barHideTimer)
-  barWindow?.webContents.send('capture:state-changed', state)
-  barWindow?.showInactive()
-  barPositioner?.preview(true)
-}
-function broadcastLocalAsrState(status: import('./services/local-asr/model-store').ModelStatus) {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('localAsr:state', status)
-  }
-}
-function broadcastProviderChanged(provider: AppConfig['provider']) {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('speech:providerChanged', provider)
-  }
-}
-function openHubPage(page?: string) {
-  mainWindow ??= createMainWindow()
-  mainWindow.show()
-  mainWindow.focus()
-  if (page) mainWindow.webContents.send('desktop:navigate-hub', page)
-}
 function createVoicePipeline(): CaptureSession {
   return new CaptureSession({
     provider: buildProvider(),
@@ -996,15 +955,9 @@ function createVoicePipeline(): CaptureSession {
       if (['preparing', 'recording', 'stopping', 'encoding', 'uploading', 'transcribing', 'refining', 'injecting'].includes(state.phase)) {
         clearTimeout(barHideTimer); barWindow?.showInactive()
       } else if (['done', 'error', 'cancelled'].includes(state.phase)) {
-        clearTimeout(barHideTimer)
-        // N1 cold-start card stays until the user dismisses or finishes a CTA.
-        if (state.phase === 'error' && state.detail === 'siliconflow_key_required') {
-          barPositioner?.preview(true)
-          return
-        }
-        barPositioner?.preview(false)
         const hasCompletionNotice = state.phase === 'done' && Boolean(state.detail?.trim() || state.audioNotice?.trim())
         const hideDelay = state.phase === 'error' ? 4500 : hasCompletionNotice ? 1400 : 300
+        clearTimeout(barHideTimer)
         barHideTimer = setTimeout(() => barWindow?.hide(), hideDelay)
       }
     },
@@ -1141,7 +1094,6 @@ const hotkeys = new HotkeyStateMachine(event => {
       store?.set({ mode } as Partial<AppConfig>)
       mainWindow?.webContents.send('config:changed', getPublicConfig())
     }
-    if (needsColdStart()) { showColdStartGate(mode ?? sessionMode); return }
     void pipeline.onStart()
   },
   stop: () => { void pipeline.onStop() },
@@ -1740,11 +1692,8 @@ function registerFrontendCompat(): void {
       getInteractiveCardPayload: () => pendingCardPayload,
       updateInteractiveCardBounds: (bounds) => { updateCardBounds(bounds) },
       setHubWindowButtonVisibility: () => undefined,
-      floatingBarSetExpanded: (expanded) => {
-        if (expanded) { clearTimeout(barHideTimer); barWindow?.showInactive() }
-        barPositioner?.preview(Boolean(expanded))
-      },
-      floatingBarClick: () => { if (needsColdStart()) showColdStartGate(sessionMode); else void pipeline.onStart() },
+      floatingBarSetExpanded: () => undefined,
+      floatingBarClick: () => { void pipeline.onStart() },
       isOnboardingWindowVisible: () => Boolean(mainWindow?.isVisible()),
       launchApplication: (bundleId) => UtilHelper.launchApplication(bundleId),
       restart: () => { app.relaunch(); app.exit(0) }
@@ -1765,10 +1714,7 @@ function registerIpc(): void {
       appVersion: app.getVersion(), provider: config.provider
     }
   })
-  ipcMain.handle('capture:start', async (_e,options?:{preview?:boolean}) => {
-    if (needsColdStart()) { showColdStartGate(sessionMode); return null }
-    return pipeline.onStart({preview:options?.preview===true})
-  })
+  ipcMain.handle('capture:start', async (_e,options?:{preview?:boolean}) => pipeline.onStart({preview:options?.preview===true}))
   ipcMain.handle('capture:stop', async () => pipeline.onStop())
   ipcMain.handle('capture:cancel', () => pipeline.onCancel())
   ipcMain.on('capture:flushed', (event,id:string)=>{if(event.sender===barWindow?.webContents)pendingFlush.get(id)?.()})
@@ -1996,11 +1942,9 @@ function registerIpc(): void {
   })
 
   const modelCaller = (event: Electron.IpcMainInvokeEvent) => {
-    const owner = [mainWindow, speechSettingsWindow, barWindow].find(window => window && !window.isDestroyed() && window.webContents === event.sender)
+    const owner = [mainWindow, speechSettingsWindow].find(window => window && !window.isDestroyed() && window.webContents === event.sender)
     if (!owner || event.senderFrame !== owner.webContents.mainFrame) throw new Error('invalid_model_request')
   }
-  // Ensure one listener pushes install/download progress to every renderer.
-  getLocalModels().onStatus(broadcastLocalAsrState)
   ipcMain.handle('local-asr:status', event => { modelCaller(event); return getLocalModels().check() })
   ipcMain.handle('local-asr:install', async event => {
     modelCaller(event)
@@ -2010,43 +1954,6 @@ function registerIpc(): void {
     return status
   })
   ipcMain.handle('local-asr:cancel', event => { modelCaller(event); getLocalModels().dispose() })
-  /** Unique write path for switching recognition provider after localAsr.check() === ready. */
-  ipcMain.handle('speech:set-recognition-provider', async (event, provider: unknown) => {
-    modelCaller(event)
-    if (provider !== 'local' && provider !== 'siliconflow' && provider !== 'apple' && provider !== 'openai' && provider !== 'custom') {
-      throw new Error('invalid_config')
-    }
-    if (pipeline.isBusy) throw new Error('请先结束当前听写，再修改识别服务')
-    if (provider === 'local') {
-      const generation = configGeneration
-      if ((await getLocalModels().check()).state !== 'ready') throw new Error('model_not_ready')
-      if (generation !== configGeneration) throw new Error('speech_settings_changed')
-      if (pipeline.isBusy) throw new Error('请先结束当前听写，再启用本地模型。')
-    }
-    if (provider === 'apple') {
-      const status = await getAppleSpeech().status(getConfig().appleSpeechLanguage ?? 'auto')
-      if (!status.available || !status.installed) throw new Error(status.error || 'apple_speech_model_missing')
-    }
-    const patch: Partial<AppConfig> = {
-      provider,
-      ...(provider === 'local' ? { sttModel: 'sensevoice-small-int8' as const } : {}),
-      ...(provider === 'apple' ? { sttModel: 'apple-speech' as const } : {}),
-    }
-    store?.set(patch as AppConfig)
-    configGeneration++
-    pipeline.setProvider(buildProvider())
-    if (provider === 'local') void prepareLocalModels()
-    const publicConfig = getPublicConfig()
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('config:changed', publicConfig)
-    broadcastProviderChanged(provider)
-    return publicConfig
-  })
-  ipcMain.handle('desktop:open-speech-settings', (_e, focus?: unknown) => {
-    showSpeechSettings(focus === 'siliconflow-key' ? 'siliconflow-key' : undefined)
-  })
-  ipcMain.handle('desktop:open-hub', (_e, page?: unknown) => {
-    openHubPage(typeof page === 'string' ? page : undefined)
-  })
   const diagnosticId = (value: unknown) => {
     if (typeof value !== 'string' || !/^[a-f0-9-]{36}$/i.test(value)) throw new Error('invalid_config')
     return value
@@ -2128,7 +2035,6 @@ function registerIpc(): void {
     if ('shortcuts' in patch) reloadKeyboardShortcuts()
     const publicConfig = getPublicConfig()
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send('config:changed', publicConfig)
-    if ('provider' in patch) broadcastProviderChanged(next.provider)
     if ('historyRetentionDays' in patch) {
       await historyLifecycle.purgeOlderThan(next.historyRetentionDays)
     }
@@ -2249,7 +2155,7 @@ function refreshTrayMenu(): void {
   }
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开主界面', click: () => { mainWindow ??= createMainWindow(); mainWindow.show() } },
-    { label: '听写模型与 DeepSeek 设置', click: () => showSpeechSettings() },
+    { label: '听写模型与 DeepSeek 设置', click: showSpeechSettings },
     { label: '当前 Skill', enabled: p.skills.enabled, submenu: [
       { label: '按场景自动选择', type: 'radio', checked: p.skills.selected === 'auto', click: () => selectSkill('auto') },
       { label: '不使用 Skill', type: 'radio', checked: p.skills.selected === 'none', click: () => selectSkill('none') },
@@ -2257,7 +2163,7 @@ function refreshTrayMenu(): void {
     ] },
     { label: '粘贴上一条听写', click: () => { void pasteLastTranscript() } },
     { label: '选中文字快捷操作', click: openSelectionActions },
-    { label: '开始/停止录音', click: () => { if (pipeline.isBusy) void pipeline.onStop(); else if (needsColdStart()) showColdStartGate(sessionMode); else void pipeline.onStart() } },
+    { label: '开始/停止录音', click: () => { void (pipeline.isBusy ? pipeline.onStop() : pipeline.onStart()) } },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() }
   ]))

@@ -741,7 +741,6 @@ function About() {
           : <button disabled={busy} onClick={() => void change(() => api.desktop.updater.check(update.channel))}>{update.phase === 'checking' ? '正在检查…' : '检查更新'}</button>}
       </div>
       {update.phase === 'ready' && <p className="about-note">安装会关闭应用并重启，请先保存尚未保留的文字。</p>}
-      {api.platform === 'darwin' && <p className="about-note">临时签名包更新后，系统可能再次要求授权麦克风、输入监控或辅助功能。正式公证版若由同一开发者团队签名，权限通常会保持；若仍提示，按系统引导重授即可。临时签名包首次启动时，系统还可能再询问钥匙串访问；属正常现象，按提示允许即可。</p>}
       {update.releaseNotes && <details className="about-notes"><summary>版本说明 · {update.version}</summary><Markdown text={update.releaseNotes} /></details>}
       {error && <p className="inline-error" role="alert">{error}</p>}
       <div className="about-row">
@@ -757,20 +756,17 @@ function About() {
 function Help() {
   const groups: [string, [string, string][]][] = [
     ['开始使用', [
-      ['如何开始听写？', '点进任意输入框，按听写快捷键开始说话，再按一次结束。Esc 取消。若尚未配置 SiliconFlow Key，听写入口会提示「下载并启用本地 INT8」或「填写 Key 走云端」。'],
+      ['如何开始听写？', '点进任意输入框，按听写快捷键开始说话，再按一次结束。Esc 取消。'],
       ['需要哪些权限？', api.platform === 'darwin' ? '麦克风、输入监控、辅助功能，在「系统设置 → 隐私与安全性」里打开。'
             : '在 Windows 隐私设置里允许桌面应用使用麦克风。'],
       ['翻译与随便问如何使用？', '按对应快捷键说话即可，需要先配好文字整理。选中文字再按随便问，可以让它改写或解释。'],
     ]],
     ['隐私与离线', [
       ['录音会上传吗？', '云端识别会把录音上传到 SiliconFlow；本地识别时录音不离开电脑。开启文字整理后，识别文字与允许的文字上下文会发送到整理服务。'],
-      ['离线可以使用吗？', '无 Key 时可在听写入口或「听写模型」下载并启用本地 INT8；也可填写 SiliconFlow Key 走云端。本地准备完成后，关闭文字整理即可离线听写。'],
+      ['离线可以使用吗？', '在「听写模型」选择本地，点击「下载并启用」，准备完成后关闭文字整理并保存。'],
     ]],
     ['遇到问题', [
       ['失败后怎样找回内容？', '在历史记录里打开那一条，可以重放录音或重新识别。'],
-      ['更新后要重新开权限吗？', api.platform === 'darwin'
-        ? '临时签名包更新后，系统可能再次要求授权麦克风、输入监控或辅助功能。正式公证版若由同一开发者团队签名，权限通常会保持；若仍提示，按系统引导重授即可。临时签名包首次启动时，系统还可能再询问钥匙串访问；属正常现象，按提示允许即可。'
-        : '一般不需要。若系统再次询问麦克风权限，在隐私设置里允许即可。'],
     ]],
   ]
   return (
