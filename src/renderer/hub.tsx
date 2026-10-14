@@ -58,9 +58,15 @@ function Hub() {
       ),
     )
     const offPrefs = api.desktop.onPreferences(setPrefs)
+    const offNavigate = api.desktop.onNavigate((page) => {
+      setOnboarding(false)
+      setSettings(null)
+      setPage(page)
+    })
     return () => {
       off()
       offPrefs()
+      offNavigate()
     }
   }, [])
   useEffect(() => {
@@ -497,7 +503,7 @@ function Onboarding({ complete, preferences }: { complete: () => void; preferenc
         ) : step === 2 ? (
           <>
             <h1>选择识别方式</h1>
-            <p>之后可以在设置里随时更改。</p>
+            <p>之后可以在设置里随时更改。无 Key 也可先继续；第一次听写时会提示下载本地或填写云端 Key。</p>
             <SpeechSettings embedded onDone={() => setStep(3)} onBack={() => setStep(skipPermissions ? 0 : 1)} />
           </>
         ) : (

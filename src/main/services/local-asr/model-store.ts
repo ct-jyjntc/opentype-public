@@ -19,8 +19,20 @@ export class SenseVoiceModelStore {
   private checking?: Promise<ModelStatus>
   private abort?: AbortController
   private verified = new Map<string, string>()
+  private listeners = new Set<(status: ModelStatus) => void>()
   constructor(readonly directory: string, private readonly files: readonly ModelFile[] = SENSEVOICE_FILES, private readonly userAgent = 'OpenType') {
     this.status = { state: 'missing', downloaded: 0, total: files.reduce((sum, file) => sum + file.bytes, 0) }
+  }
+
+  /** Push install/check progress to subscribers (floating bar + settings). */
+  onStatus(listener: (status: ModelStatus) => void) {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  private publish(status: ModelStatus) {
+    this.status = status
+    for (const listener of this.listeners) listener(status)
   }
 
   check(): Promise<ModelStatus> {
@@ -32,10 +44,10 @@ export class SenseVoiceModelStore {
     this.checking = (async () => {
       let ready = true
       for (const file of this.files) if (!(await this.valid(file))) { ready = false; break }
-      this.status = ready
+      this.publish(ready
         ? { state: 'ready', downloaded: this.status.total, total: this.status.total }
         : { state: previous.state === 'error' ? 'error' : 'missing', downloaded: 0,
-          total: this.status.total, ...(previous.error ? { error: previous.error } : {}) }
+          total: this.status.total, ...(previous.error ? { error: previous.error } : {}) })
       return this.status
     })().finally(() => { this.checking = undefined })
     return this.checking
@@ -59,7 +71,7 @@ export class SenseVoiceModelStore {
     this.pending = (async () => {
       // A check started before installation must settle before any replacement is made.
       await this.checking
-      this.status = { state: 'checking', downloaded: 0, total: this.status.total }
+      this.publish({ state: 'checking', downloaded: 0, total: this.status.total })
       try {
         await mkdir(this.directory, { recursive: true })
         for (const file of this.files) {
@@ -67,7 +79,7 @@ export class SenseVoiceModelStore {
           if (!(await this.valid(file, this.directory, controller.signal))) {
             controller.signal.throwIfAborted()
             if (sourceDirectory && await this.valid(file, sourceDirectory, controller.signal)) {
-              this.status = { ...this.status, state: 'installing' }
+              this.publish({ ...this.status, state: 'installing' })
               const destination = join(this.directory, file.name), part = destination + `.${randomUUID()}.bundle-part`
               try {
                 await copyFile(join(sourceDirectory, file.name), part)
@@ -78,21 +90,21 @@ export class SenseVoiceModelStore {
               } finally { this.verified.delete(part); await unlink(part).catch(() => {}) }
             } else if (allowDownload) {
               controller.signal.throwIfAborted()
-              this.status = { ...this.status, state: 'downloading' }
+              this.publish({ ...this.status, state: 'downloading' })
               await this.download(file, controller.signal)
               continue // download already accounts for these bytes
             } else { throw new Error('bundled_model_checksum_failed') }
           }
           controller.signal.throwIfAborted()
-          this.status = { ...this.status, downloaded: this.status.downloaded + file.bytes }
+          this.publish({ ...this.status, downloaded: this.status.downloaded + file.bytes })
         }
         controller.signal.throwIfAborted()
-        this.status = { state: 'ready', downloaded: this.status.total, total: this.status.total }
+        this.publish({ state: 'ready', downloaded: this.status.total, total: this.status.total })
       } catch {
-        this.status = { ...this.status, state: 'error', error: controller.signal.aborted
+        this.publish({ ...this.status, state: 'error', error: controller.signal.aborted
           ? '模型准备已取消，可以重试。'
           : allowDownload ? '模型准备失败，请检查磁盘空间和网络后重试。'
-            : '安装包内的模型未能准备完成，可在此重试。请检查磁盘空间；安装包损坏时需重新下载安装包。' }
+            : '安装包内的模型未能准备完成，可在此重试。请检查磁盘空间；安装包损坏时需重新下载安装包。' })
       }
       return this.status
     })().finally(() => { this.pending = undefined; this.abort = undefined })
@@ -146,7 +158,7 @@ export class SenseVoiceModelStore {
             if (!bytesWritten) throw new Error('model_write_failed')
             offset += bytesWritten
           }
-          this.status = { ...this.status, downloaded: this.status.downloaded + value.byteLength }
+          this.publish({ ...this.status, downloaded: this.status.downloaded + value.byteLength })
         }
       } finally { await reader.cancel().catch(() => {}) }
       if (received !== file.bytes || hash.digest('hex') !== file.sha256) throw new Error('model_checksum_failed')

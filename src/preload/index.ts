@@ -75,9 +75,25 @@ const api = {
     install: (language = 'auto') => ipcRenderer.invoke('apple-speech:install', language) as Promise<import('../main/services/providers/apple-speech').AppleSpeechStatus>,
   },
   localAsr: {
-    status: () => ipcRenderer.invoke('local-asr:status'),
-    install: () => ipcRenderer.invoke('local-asr:install'),
-    cancel: () => ipcRenderer.invoke('local-asr:cancel')
+    /** Alias of status(); N1 gate only treats check() === ready as enableable. */
+    check: () => ipcRenderer.invoke('local-asr:status') as Promise<import('../main/services/local-asr/model-store').ModelStatus>,
+    status: () => ipcRenderer.invoke('local-asr:status') as Promise<import('../main/services/local-asr/model-store').ModelStatus>,
+    install: () => ipcRenderer.invoke('local-asr:install') as Promise<import('../main/services/local-asr/model-store').ModelStatus>,
+    cancel: () => ipcRenderer.invoke('local-asr:cancel'),
+    onState: (cb: (status: import('../main/services/local-asr/model-store').ModelStatus) => void) => {
+      const handler = (_: unknown, status: import('../main/services/local-asr/model-store').ModelStatus) => cb(status)
+      ipcRenderer.on('localAsr:state', handler)
+      return () => { ipcRenderer.off('localAsr:state', handler) }
+    },
+  },
+  speech: {
+    setRecognitionProvider: (provider: 'siliconflow' | 'local' | 'openai' | 'custom' | 'apple') =>
+      ipcRenderer.invoke('speech:set-recognition-provider', provider),
+    onProviderChanged: (cb: (provider: 'siliconflow' | 'local' | 'openai' | 'custom' | 'apple') => void) => {
+      const handler = (_: unknown, provider: 'siliconflow' | 'local' | 'openai' | 'custom' | 'apple') => cb(provider)
+      ipcRenderer.on('speech:providerChanged', handler)
+      return () => { ipcRenderer.off('speech:providerChanged', handler) }
+    },
   },
   capture: {
     start: (options?: { preview?: boolean }) => ipcRenderer.invoke(CH.START_CAPTURE, options),
