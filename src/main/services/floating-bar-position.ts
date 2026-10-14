@@ -31,7 +31,7 @@ export class FloatingBarPositioner {
     const preferred = prefs.placement === 'remember' ? prefs.position?.displayId : this.displayId
     const display = displays.find(d => d.id === preferred) ?? displays.find(d => d.id === this.displayId)
       ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-    const area = display.workArea, width = Math.min(360, area.width), height = Math.min(this.expanded ? 224 : 104, area.height)
+    const area = display.workArea, width = Math.min(360, area.width), height = Math.min(this.expanded ? 320 : 104, area.height)
     const margin = 20
     let x = area.x + (area.width - width) / 2
     let y = prefs.placement === 'top' ? area.y + margin : area.y + area.height - height - margin

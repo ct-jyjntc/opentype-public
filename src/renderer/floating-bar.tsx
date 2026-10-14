@@ -1,27 +1,59 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { wireCaptureLifecycle } from './capture'
+import { ColdStartSpeech, type ColdStartReason } from './components/cold-start-speech'
 import { Icon } from './components/ui'
 import { errorMessage, type VoiceState, type Preferences } from '../shared/desktop'
 import type { CorrectionCandidate } from '../shared/corrections'
 import './floating-bar.css'
+
 const labels = {
   idle: '',
   preparing: '正在确认输入位置',
-  recording: '正在聆听',
+  recording: '正在录音',
   stopping: '正在收尾录音',
   encoding: '正在保存录音',
-  uploading: '正在识别',
-  transcribing: '正在识别最后片段',
+  uploading: '正在识别已说内容…',
+  transcribing: '正在识别最后一段…',
   refining: '正在整理文字',
   injecting: '正在输入',
-  done: '已完成',
+  done: '识别完成',
   error: '无法完成听写',
   cancelled: '已取消',
 }
 // Symmetric envelope: short at the edges, tall in the middle.
 const wave = [5, 8, 12, 16, 19, 16, 12, 8, 5]
 const activeCapturePhases = ['preparing', 'recording', 'stopping', 'encoding', 'uploading', 'transcribing', 'refining', 'injecting']
+const cloudFailureDetails = new Set([
+  'siliconflow_invalid_key',
+  'siliconflow_insufficient_balance',
+  'siliconflow_forbidden',
+  'siliconflow_rate_limited',
+  'siliconflow_network_error',
+  'siliconflow_timeout',
+  'siliconflow_unavailable',
+  'siliconflow_model_unavailable',
+  'siliconflow_redirect_refused',
+])
+const recoveryDetails = new Set([
+  'injection_failed',
+  'injection_target_changed',
+  'injection_target_closed',
+  'injection_app_changed',
+  'injection_focus_unavailable',
+  'injection_selection_changed',
+  'injection_unverified',
+  'injection_cancelled_after_send',
+  'injection_already_sent',
+  'injection_permission',
+  'injection_elevated_target',
+  'injection_clipboard_unavailable',
+  'injection_keys_held',
+  'injection_target_unavailable',
+  'injection_target_not_editable',
+  'injection_secure_target',
+])
+
 function FloatingBar() {
   const [state, setState] = useState<VoiceState>({ phase: 'idle' }),
     [seconds, setSeconds] = useState(0),
@@ -30,7 +62,11 @@ function FloatingBar() {
     [candidateBusy, setCandidateBusy] = useState(false),
     [analysisFallback, setAnalysisFallback] = useState<'not_configured' | 'request_failed'>(),
     [feedback, setFeedback] = useState(''),
-    [feedbackTitle, setFeedbackTitle] = useState('')
+    [feedbackTitle, setFeedbackTitle] = useState(''),
+    [coldStart, setColdStart] = useState<ColdStartReason | null>(null),
+    [coldDetail, setColdDetail] = useState<string>(),
+    [provider, setProvider] = useState<string>('siliconflow'),
+    [copied, setCopied] = useState(false)
   const preferences = useRef<Preferences>()
   const device = useRef('default'),
     started = useRef(0),
@@ -43,7 +79,9 @@ function FloatingBar() {
     feedbackTimer = useRef<ReturnType<typeof setTimeout>>(),
     hideBarTimer = useRef<ReturnType<typeof setTimeout>>(),
     feedbackRef = useRef(''),
-    correctionSessionRef = useRef(false)
+    correctionSessionRef = useRef(false),
+    coldStartRef = useRef<ColdStartReason | null>(null)
+
   const updateCandidate = (value: CorrectionCandidate | null) => {
     candidateRef.current = value
     setCandidate(value)
@@ -53,13 +91,26 @@ function FloatingBar() {
     feedbackRef.current = value
     setFeedback(value)
   }
+  const setCold = useCallback((reason: ColdStartReason | null, detail?: string) => {
+    coldStartRef.current = reason
+    setColdStart(reason)
+    setColdDetail(detail)
+    if (reason) void window.opentype.window.showBar()
+  }, [])
   const hideWhenSettled = (delay = 0) => {
     clearTimeout(hideBarTimer.current)
     hideBarTimer.current = setTimeout(() => {
+      if (coldStartRef.current) return
       if (activeCapturePhases.includes(stateRef.current.phase) || candidateRef.current || feedbackRef.current) return
       void window.opentype.window.hideBar()
     }, delay)
   }
+  const dismissColdStart = useCallback(() => {
+    setCold(null)
+    setState({ phase: 'idle' })
+    stateRef.current = { phase: 'idle' }
+    void window.opentype.window.hideBar()
+  }, [setCold])
   const restoreNextCandidate = async (historyId: string, expectedScope: string, generation: number) => {
     try {
       const snapshot = await window.opentype.desktop.dictionary.snapshot()
@@ -81,10 +132,19 @@ function FloatingBar() {
   useEffect(() => {
     void window.opentype.config
       .get()
-      .then((c) => (device.current = c.micDeviceId))
-    const offConfig = window.opentype.config.onChanged(
-      (c) => (device.current = c.micDeviceId),
-    )
+      .then((c) => {
+        device.current = c.micDeviceId
+        setProvider(c.provider)
+      })
+    const offConfig = window.opentype.config.onChanged((c) => {
+      device.current = c.micDeviceId
+      setProvider(c.provider)
+      if (c.provider === 'local' && coldStartRef.current) dismissColdStart()
+    })
+    const offProvider = window.opentype.speech.onProviderChanged((value) => {
+      setProvider(value)
+      if (value === 'local' && coldStartRef.current) dismissColdStart()
+    })
     void window.opentype.desktop.snapshot().then(s => { preferences.current = s.preferences }).catch(()=>{})
     const offPreferences = window.opentype.desktop.onPreferences(p => { preferences.current = p })
     const offCapture = wireCaptureLifecycle(() => device.current, () => preferences.current)
@@ -106,6 +166,13 @@ function FloatingBar() {
         correctionSessionRef.current = false
         updateFeedback('')
         setFeedbackTitle('')
+        setCopied(false)
+        setCold(null)
+      }
+      // N1 gate: missing Key → dual CTA immediately (never start mic / never auto-install).
+      // Cloud runtime failures stay on the error pill with an explicit「改用本地」.
+      if (s.phase === 'error' && s.detail === 'siliconflow_key_required') {
+        setCold('missing_key', s.detail)
       }
       setState(s)
     })
@@ -135,11 +202,12 @@ function FloatingBar() {
       offCandidate()
       offCapture()
       offConfig()
+      offProvider()
       offPreferences()
       clearTimeout(feedbackTimer.current)
       clearTimeout(hideBarTimer.current)
     }
-  }, [])
+  }, [dismissColdStart, setCold])
   useEffect(() => {
     if (state.phase !== 'recording') return
     const timer = setInterval(
@@ -245,6 +313,18 @@ function FloatingBar() {
       setCandidateBusy(false)
     }
   }
+
+  if (coldStart) {
+    return (
+      <ColdStartSpeech
+        reason={coldStart}
+        detail={coldDetail}
+        onDismiss={dismissColdStart}
+        onEnabledLocal={dismissColdStart}
+      />
+    )
+  }
+
   if (!captureBusy && candidate && state.phase !== 'error' && state.phase !== 'cancelled') {
     return (
       <div className="correction-pill" role="status" aria-label={`${candidate.original} 改为 ${candidate.replacement}`}>
@@ -268,23 +348,62 @@ function FloatingBar() {
   }
   if (!captureBusy && correctionSessionRef.current && !candidate && !feedback && state.phase === 'done') return null
   if (state.phase === 'idle') return null
-  // Mode is shown by colour only: dictation white, translation blue, ask-anything green.
+
   const mode = state.mode === 'voice_translation' ? 'translate' : state.mode === 'voice_command' ? 'ask' : 'dictate'
   const suppressDoneInjectionNotice = state.phase === 'done'
     && (state.detail === 'injection_unverified' || state.detail === 'injection_cancelled_after_send' || state.detail === 'injection_already_sent')
   const noticeText = [...new Set([suppressDoneInjectionNotice ? undefined : state.detail, state.audioNotice].filter(Boolean).map(errorMessage))].join('；')
   const errorText = state.phase === 'error' ? noticeText || labels.error : ''
-  // The capsule has room for one short clause; the full reason stays in the tooltip.
   const label = state.phase === 'error' ? errorText.split(/[，。,]/)[0]
     : state.phase === 'done' && state.detail === 'microphone_disconnected_saved' ? '录音提前结束'
     : state.phase === 'done' && noticeText ? noticeText.split(/[，。,；]/)[0]
     : state.phase === 'refining' && mode === 'translate' ? '正在翻译'
     : state.phase === 'refining' && mode === 'ask' ? '正在思考'
+    : state.phase === 'uploading' && (state.completedSegments ?? 0) > 0 ? '正在识别已说内容…'
     : labels[state.phase]
   const phaseHint = state.phase === 'recording'
     ? (state.stopGesture === 'release' ? '松开快捷键结束，Esc 取消' : '再次按下快捷键结束，Esc 取消')
     : errorText || label
   const hint = [...new Set([phaseHint, noticeText].filter(Boolean))].join('；')
+
+  const showRecovery = Boolean(state.text?.trim())
+    && ((state.phase === 'done' && state.detail && recoveryDetails.has(state.detail))
+      || (state.phase === 'error' && state.detail && recoveryDetails.has(state.detail)))
+  const showSwitchLocal = state.phase === 'error'
+    && state.detail
+    && cloudFailureDetails.has(state.detail)
+    && provider === 'siliconflow'
+
+  if (showRecovery) {
+    return (
+      <div className="recovery-pill" role="status" aria-label={hint} title={hint}>
+        <span className="bar-label">{label || '文字未插入'}</span>
+        <button
+          className="recovery-primary"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => {
+            void window.opentype.desktop.copy(state.text ?? '').then(() => {
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1200)
+            }).catch(() => {})
+          }}
+        >
+          {copied ? '已复制' : '复制文字'}
+        </button>
+        <button
+          className="recovery-secondary"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => void window.opentype.desktop.openHub('history')}
+        >
+          打开历史
+        </button>
+        <button className="bar-cancel" aria-label="关闭" onClick={() => hideWhenSettled(0)}>
+          <Icon name="close" size={16} />
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className={`recording-pill ${state.phase} mode-${mode}`} role="status" aria-label={hint} title={hint}>
       <button
@@ -320,6 +439,14 @@ function FloatingBar() {
           onClick={() => void window.opentype.capture.stop()}
         >
           <Icon name="check" size={17} />
+        </button>
+      ) : showSwitchLocal ? (
+        <button
+          className="bar-switch-local"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => setCold('cloud_failed', state.detail)}
+        >
+          改用本地
         </button>
       ) : (
         <span className={`bar-state${noticeText ? ' has-notice' : ''}`}>
