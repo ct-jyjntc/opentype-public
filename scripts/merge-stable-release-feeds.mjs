@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url)
 const yaml = require('js-yaml')
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
-if (version !== '0.2.2') throw new Error(`Expected stable version 0.2.2; got ${version}`)
+if (version !== '0.2.3') throw new Error(`Expected stable version 0.2.3; got ${version}`)
 const base = join(root, 'release', 'staging', version)
 
 async function fileHashes(path) {
@@ -75,7 +75,7 @@ const releaseFiles = []
 for (const platform of ['windows', 'macos']) for (const arch of ['x64', 'arm64']) {
   const directory = join(base, `${platform}-${arch}`)
   for (const name of await readdir(directory)) {
-    if (/^OpenType-0\.2\.2-(Windows|macOS)-(x64|arm64)\.(exe|dmg|zip)(\.blockmap)?$/.test(name)) {
+    if (/^OpenType-0\.2\.3-(Windows|macOS)-(x64|arm64)\.(exe|dmg|zip)(\.blockmap)?$/.test(name)) {
       releaseFiles.push(join(directory, name))
     }
   }

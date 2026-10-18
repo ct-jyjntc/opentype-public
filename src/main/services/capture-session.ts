@@ -69,7 +69,6 @@ export interface CaptureSessionDeps {
     contextEdit?: ContextEdit,
   ) => Promise<DeliveryOutcome | void>
   releaseTarget?: (target: CaptureTarget) => void
-  observeInput?: (id: string, text: string, target: CaptureTarget) => boolean
   showFallback?: (text: string, id: string) => void
   showCard: (text: string, id: string, target: CaptureTarget) => boolean | void
   changed: () => void
@@ -78,7 +77,11 @@ export interface CaptureSessionDeps {
 /** One renderer owns the microphone. Stop waits for its worklet acknowledgement before encoding. */
 export class CaptureSession {
   private session: Session | null = null
-  private starting: { id: string; controller: AbortController } | null = null
+  private starting: {
+    id: string
+    controller: AbortController
+    pendingAudio: Array<{ pcm: Float32Array; sampleRate: number; audioId?: string }>
+  } | null = null
   private provider: SpeechProvider
   private rendererVoice: RendererVoiceService
   private mode: CaptureMode | undefined
@@ -120,7 +123,8 @@ export class CaptureSession {
   async onStart(options: { preview?: boolean } = {}) {
     if (this.isBusy) return null
     const id = randomUUID()
-    const pending = { id, controller: new AbortController() }
+    const pending = { id, controller: new AbortController(),
+      pendingAudio: [] as Array<{ pcm: Float32Array; sampleRate: number; audioId?: string }> }
     const provider = this.provider
     this.starting = pending
     let target: CaptureTarget | undefined
@@ -166,6 +170,13 @@ export class CaptureSession {
           if (!active.stopping) this.notify({ phase: 'recording', audioId: id, preview, completedSegments, skillName: active.skillName })
         },
       })
+      for (const audio of pending.pendingAudio) {
+        this.session.chunks.push(audio.pcm)
+        this.session.samples += audio.pcm.length
+        this.session.sampleRate = audio.sampleRate
+        this.session.live?.pushAudio(audio.pcm)
+      }
+      pending.pendingAudio = []
       this.notify({ phase: 'recording', audioId: id })
       return { audioId: id }
     } catch (error) {
@@ -181,6 +192,12 @@ export class CaptureSession {
   }
   pushAudio(pcm: Float32Array, sampleRate: number, _level: number, audioId?: string) {
     const s = this.session
+    if (!s && this.starting && !this.starting.controller.signal.aborted
+      && sampleRate === 16000 && pcm.length
+      && (audioId === undefined || audioId === this.starting.id)) {
+      this.starting.pendingAudio.push({ pcm, sampleRate, audioId })
+      return
+    }
     if (
       !s ||
       !s.acceptingAudio ||
@@ -249,6 +266,7 @@ export class CaptureSession {
       }
       notify('encoding')
       const data = encodeWav(s.chunks, s.sampleRate)
+      s.chunks = []
       const audioPath = await this.deps.saveAudio(s.id, data)
       const meta: Record<string, unknown> = {
         skill_id: null,
@@ -373,8 +391,6 @@ export class CaptureSession {
                     ...(delivered.contextEditReason ? { context_edit_reason: delivered.contextEditReason } : {}),
                   } : {}) }),
                 debugInfo: JSON.stringify({ detail: result.detail }), updatedAt: new Date().toISOString() })
-              if (delivered.status === 'verified' && s.settings.mode === 'voice_transcript' && !signal.aborted)
-                s.targetTransferred = this.deps.observeInput?.(s.id, result.text, s.target) === true
             } catch { result.detail = 'injection_history_save_failed' }
           }
         }

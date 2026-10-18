@@ -91,7 +91,11 @@ export class RemoteBlacklist {
   async refresh(force = false): Promise<void> {
     if (!force && Date.now() - this.fetchedAt < RemoteBlacklist.TTL_MS) return
     try {
-      this.domains = await this.fetcher()
+      const values = await this.fetcher()
+      this.domains = [...new Set(values.map(value => value.trim().toLowerCase().replace(/^\./, '').replace(/\.$/, ''))
+        .filter(value => value.length > 0 && value.length <= 253
+          && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value)))]
+        .slice(0, 5000)
       this.fetchedAt = Date.now()
     } catch {
       // 拉取失败沿用旧列表：宁可少脱敏也不能因为网络问题放行
@@ -103,4 +107,6 @@ export class RemoteBlacklist {
     const d = domain.toLowerCase()
     return this.domains.some((entry) => d === entry || d.endsWith(`.${entry}`))
   }
+
+  entries(): string[] { return [...this.domains] }
 }

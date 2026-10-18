@@ -4,7 +4,7 @@ const ignored = new Set(['今天', '明天', '后天', '昨天', '上午', '下�
 function term(value: string) {
   return value.trim().replace(/\s+/g, ' ')
 }
-export function isCorrectionTerm(value: string) {
+function isCorrectionTerm(value: string) {
   return value.length >= 2 && value.length <= 24 && !ignored.has(value)
     && /^[\p{L}][\p{L} +#-]*[\p{L}+#]$/u.test(value)
     && !/^[零〇一二三四五六七八九十百千万亿两]+(?:点|年|月|日|时|分|秒|折|元|个)?$/.test(value)
@@ -79,23 +79,4 @@ export function extractCorrections(before: string, after: string): CorrectionPai
   }
   flush()
   return result.slice(0, 20)
-}
-
-/** Passive input observations are less intentional than saving a history edit.
- * Require a small spelling change so general rewrites do not train vocabulary. */
-export function extractInputCorrections(before: string, after: string): CorrectionPair[] {
-  return extractCorrections(before, after).filter(pair => {
-    const a = [...pair.original.toLocaleLowerCase()], b = [...pair.replacement.toLocaleLowerCase()]
-    // A passive edit is weaker evidence than an explicit history correction.
-    // Require one complete lexical token and a small spelling change; otherwise
-    // a two-character content rewrite such as 张伟 → 李雷 would look valid.
-    if (pair.original.includes(' ') || pair.replacement.includes(' ')) return false
-    let previous = Array.from({ length: b.length + 1 }, (_, i) => i)
-    for (let i = 0; i < a.length; i++) {
-      const next = [i + 1]
-      for (let j = 0; j < b.length; j++) next.push(Math.min(next[j] + 1, previous[j + 1] + 1, previous[j] + (a[i] === b[j] ? 0 : 1)))
-      previous = next
-    }
-    return previous[b.length] <= Math.max(1, Math.floor(Math.max(a.length, b.length) * 0.25))
-  })
 }

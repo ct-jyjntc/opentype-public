@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { readFile, writeFile, stat } from 'node:fs/promises'
 import { serviceRequest as request } from './services/network'
 
-import { InputHelper, InputDelivery, InputObservation, ContextHelper, UtilHelper, KeyboardHelper, type KeyEvent } from './native/ffi'
+import { InputHelper, InputDelivery, ContextHelper, UtilHelper, KeyboardHelper, type KeyEvent } from './native/ffi'
 import { HotkeyStateMachine, parseShortcutString, type HotkeyBinding } from './services/hotkey'
 import { ShortcutCapture, focusedKeyEvent } from './services/shortcut-capture'
 import { CaptureSession } from './services/capture-session'
@@ -29,15 +29,14 @@ import { resolveOutputPreferences } from '../shared/output-preferences'
 import { HistoryLifecycle, readStoredAudio } from './services/history-lifecycle'
 import { AudioStorage } from './services/audio-storage'
 import { registerAudioStorage } from './services/audio-storage-ipc'
-import { deliverToInput } from './services/input-delivery'
+import { captureReadableInput, deliverToInput } from './services/input-delivery'
 import { readInputDiagnostics, recordInputDiagnostic, inputDiagnosticReason } from './services/input-diagnostics'
 import { capturedContext } from './services/capture-context'
 import { AnswerCardSession } from './services/answer-card'
-import { InputCorrections } from './services/input-corrections'
-import { analyzeInputCorrection } from './services/correction-intelligence'
+import { RemoteBlacklist } from './services/privacy'
 import { errorMessage, type CardPayload, type VoiceState } from '../shared/desktop'
 import { AudioEncoder } from './services/audio'
-import { HistoryRepo, DictionaryRepo, CorrectionRepo, initDatabase, closeDatabase } from './db'
+import { HistoryRepo, DictionaryRepo, initDatabase, closeDatabase } from './db'
 import { AuthService, type AuthUser } from './services/auth'
 import { SyncEngine, type SyncRecord } from './services/sync'
 import { syncScope } from './services/sync-scope'
@@ -197,11 +196,16 @@ async function initStore(): Promise<void> {
 }
 
 const getConfig = (): AppConfig => ({ ...(store?.store ?? DEFAULT_CONFIG), cloudBaseUrl: OFFICIAL_BACKEND_URL } as AppConfig)
+let remoteBlacklist: RemoteBlacklist | undefined
+const effectiveBlacklistDomains = () => [...new Set([
+  ...getConfig().blacklistDomains,
+  ...(remoteBlacklist?.entries() ?? []),
+])]
 const getPublicConfig = () => {
   const c = getConfig()
   // Only settings used by the renderer cross this boundary, never store namespaces or secrets.
   return { mode:c.mode, shortcuts:effectiveShortcuts(), outputLanguage:c.outputLanguage, autoInject:c.autoInject,
-    micDeviceId:c.micDeviceId, blacklistDomains:c.blacklistDomains, apiBaseUrl:c.apiBaseUrl,
+    micDeviceId:c.micDeviceId, blacklistDomains:effectiveBlacklistDomains(), apiBaseUrl:c.apiBaseUrl,
     cloudBaseUrl:c.cloudBaseUrl, historyRetentionDays:c.historyRetentionDays, provider:c.provider, appleSpeechLanguage:c.appleSpeechLanguage ?? 'auto',
     sttModel:c.sttModel, refineModel:c.refineModel, refineBaseUrl:c.refineBaseUrl,
     enableRefine:c.enableRefine, hasOnboarded:c.hasOnboarded, hasRefineApiKey:!!c.refineApiKey,
@@ -626,7 +630,7 @@ function displayInteractiveCard(payload: CardPayload): void {
 const answerCards = new AnswerCardSession({
   show: displayInteractiveCard,
   release: token => InputHelper.releaseTarget(token),
-  deliver: (token, text, signal) => { inputCorrections.stop(); return deliverToInput(InputDelivery, { token }, text, signal) },
+  deliver: (token, text, signal) => deliverToInput(InputDelivery, { token }, text, signal),
   validate: async payload => {
     if (pipeline?.isBusy) throw new Error('answer_recording_busy')
     if (payload.origin === 'selection' && !payload.audioId) return
@@ -719,6 +723,24 @@ function createAuthService(): AuthService {
     save: async (user) => {
       store?.set({ userData: user ? JSON.stringify({ ...user, server_url: OFFICIAL_BACKEND_URL }) : '' } as unknown as Partial<AppConfig>)
     }
+  })
+}
+
+function createRemoteBlacklist(): RemoteBlacklist {
+  return new RemoteBlacklist(async () => {
+    const response = await request(serviceEndpoint(OFFICIAL_BACKEND_URL, '/app/get_blacklist_domain'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'user-agent': `OpenType/${app.getVersion()}` },
+      body: '{}',
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (response.statusCode !== 200) {
+      await response.body.dump()
+      throw new Error(`blacklist_http_${response.statusCode}`)
+    }
+    const payload = await response.body.json() as { data?: { data?: unknown } }
+    if (!Array.isArray(payload.data?.data)) throw new Error('blacklist_invalid_response')
+    return payload.data.data.filter((value): value is string => typeof value === 'string')
   })
 }
 
@@ -840,7 +862,7 @@ function createSyncEngine(): SyncEngine {
     loadPendingRecords: async (userId: string, limit: number, includeExhausted?: boolean) => {
       // 用 pendingSyncForApi 而非 pendingSync：前者把 drizzle 的 camelCase
       // 转成服务端期望的 snake_case，否则服务端读到 undefined
-      return await HistoryRepo.pendingSyncForApi(userId, limit, includeExhausted, getConfig().blacklistDomains, baseUrl) as unknown as SyncRecord[]
+      return await HistoryRepo.pendingSyncForApi(userId, limit, includeExhausted, effectiveBlacklistDomains(), baseUrl) as unknown as SyncRecord[]
     },
     markSynced: async (ids: string[]) => {
       await HistoryRepo.markSynced(ids)
@@ -890,42 +912,6 @@ function createSyncEngine(): SyncEngine {
 let pipeline: CaptureSession
 let audioStorage: AudioStorage
 let historyLifecycle: HistoryLifecycle
-let shownCorrectionCapsuleId: string | undefined
-const inputCorrections = new InputCorrections({
-  native: InputObservation,
-  enabled: () => ((store?.get('app-settings' as never) ?? {}) as Record<string, unknown>).learnFromInputEdits === true,
-  scope: () => DictionaryRepo.scope(),
-  allowed: (id, text, target) => !target.audioContext.redacted && CorrectionRepo.canObserve(id, text, getConfig().blacklistDomains, target.inputWebDomains),
-  analyze: (before, after, signal) => {
-    const c = getConfig()
-    return analyzeInputCorrection(before, after, { provider: 'deepseek', baseUrl: c.refineBaseUrl,
-      model: c.refineModel, apiKey: c.refineApiKey, enabled: c.enableRefine }, signal)
-  },
-  save: (id, text, corrected, target, scope, pairs, fallbackReason) => {
-    if (DictionaryRepo.scope() !== scope) return false
-    const result = CorrectionRepo.observeEdit(id, text, corrected, getConfig().blacklistDomains, target.inputWebDomains, pairs)
-    if (result.active) {
-      mainWindow?.webContents.send('desktop:history-changed')
-      for (const candidateId of result.retractedIds) {
-        barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: null, candidateId, scope: result.scope })
-      }
-      if (result.candidate) {
-        shownCorrectionCapsuleId = result.candidate.id
-        clearTimeout(barHideTimer)
-        barWindow?.webContents.send('desktop:correction-capsule-candidate', {
-          candidate: result.candidate, scope: result.scope, analysisFallback: fallbackReason,
-        })
-        barWindow?.showInactive()
-      }
-    }
-    return result.active
-  },
-  retract: id => {
-    for (const candidateId of CorrectionRepo.dismissInputEdits(id)) {
-      barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: null, candidateId, scope: DictionaryRepo.scope() })
-    }
-  },
-})
 let barHideTimer: ReturnType<typeof setTimeout> | undefined
 const pendingFlush = new Map<string, () => void>()
 function historyChanged() {
@@ -937,7 +923,6 @@ function createVoicePipeline(): CaptureSession {
     provider: buildProvider(),
     notify: state => {
       if (state.phase === 'recording' && state.audioId && outputAudioSession !== state.audioId) {
-        inputCorrections.stop()
         outputAudioSession = state.audioId; outputAudioNotice = ''
         const prefs = readPreferences((store?.get('app-settings' as never) ?? {}) as Record<string, unknown>)
         outputAudio?.start(state.audioId, prefs.outputAudio)
@@ -961,16 +946,17 @@ function createVoicePipeline(): CaptureSession {
         barHideTimer = setTimeout(() => barWindow?.hide(), hideDelay)
       }
     },
-    getConfig: () => ({...getConfig(), mode:sessionMode, asrLanguage:resolveAsrLanguageFromStore(), appVersion:app.getVersion()}),
+    getConfig: () => ({...getConfig(), blacklistDomains: effectiveBlacklistDomains(),
+      mode:sessionMode, asrLanguage:resolveAsrLanguageFromStore(), appVersion:app.getVersion()}),
     context: async (mode, signal, preview, traceId) => {
-      lastPaste?.abort(); inputCorrections.stop(); closeInteractiveCard()
+      lastPaste?.abort(); closeInteractiveCard()
       // The home-page microphone preview never inserts into another app and
       // does not acquire an external input target or its context.
-      if (preview) return capturedContext({ appName: '', bundleId: '', pid: 0, contextRedacted: true }, getConfig().blacklistDomains)
+      if (preview) return capturedContext({ appName: '', bundleId: '', pid: 0, contextRedacted: true }, effectiveBlacklistDomains())
       const target = await captureVoiceTarget(mode === 'voice_command', signal, traceId)
       if (signal.aborted) { if (target.token) InputHelper.releaseTarget(target.token); signal.throwIfAborted() }
       barPositioner?.begin(target.windowBounds)
-      return capturedContext(target, getConfig().blacklistDomains)
+      return capturedContext(target, effectiveBlacklistDomains())
     },
     flush: id => new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{pendingFlush.delete(id);reject(new Error('capture_flush_timeout'))},5000)
@@ -994,7 +980,6 @@ function createVoicePipeline(): CaptureSession {
       }
     },
     releaseTarget: target => { if (target.inputToken) InputHelper.releaseTarget(target.inputToken) },
-    observeInput: (id, text, target) => inputCorrections.start(id, text, target),
     showFallback: (text, audioId) => openInteractiveCard({ text, audioId, title: '文字已生成，尚未插入' }),
     showCard: (text, audioId, target) => answerCards.present({ text, audioId, title: '随便问',
       contextNotice: target.audioContext.redacted ? '当前输入环境的文字未用于回答。' : undefined },
@@ -1020,19 +1005,22 @@ function createVoicePipeline(): CaptureSession {
 let lastPaste: AbortController | undefined
 let selectionCapture: AbortController | undefined
 function captureVoiceTarget(allowReadOnly: boolean, signal: AbortSignal, traceId?: string) {
-  signal.throwIfAborted()
-  return InputHelper.captureTarget(allowReadOnly, traceId)
+  return captureReadableInput(
+    pid => InputHelper.captureTarget(allowReadOnly, traceId, pid),
+    token => InputHelper.releaseTarget(token),
+    signal,
+  )
 }
 async function openSelectionActions() {
   if (pipeline.isBusy || shortcutCapture.active || powerLifecycle?.paused()) return
-  lastPaste?.abort(); inputCorrections.stop(); closeInteractiveCard()
+  lastPaste?.abort(); closeInteractiveCard()
   const controller = new AbortController(); selectionCapture = controller
   let snapshot: ReturnType<typeof InputHelper.captureTarget> | undefined
   try {
     snapshot = await captureVoiceTarget(true, controller.signal)
     controller.signal.throwIfAborted()
     if (!selectionActions || pipeline.isBusy) return
-    const target = capturedContext(snapshot, getConfig().blacklistDomains)
+    const target = capturedContext(snapshot, effectiveBlacklistDomains())
     selectionActions.present(target); snapshot = undefined
   } catch (error) {
     if (!controller.signal.aborted) openInteractiveCard({ title: '无法读取当前选区', text: errorMessage((error as Error).message) })
@@ -1045,7 +1033,7 @@ async function pasteLastTranscript(): Promise<void> {
   if (pipeline.isBusy || lastPaste) return
   const controller = new AbortController()
   lastPaste = controller
-  inputCorrections.stop(); closeInteractiveCard()
+  closeInteractiveCard()
   let target: ReturnType<typeof InputHelper.captureTarget> | undefined
   let text = ''
   try {
@@ -1153,7 +1141,6 @@ let powerLifecycle: ReturnType<typeof bindRecordingPowerEvents> | undefined
 function cancelRecordingControls(options: { keepDictation?: boolean } = {}) {
   selectionCapture?.abort(); selectionCapture = undefined
   selectionActions?.close()
-  inputCorrections.stop()
   lastPaste?.abort()
   hotkeys.reset()
   if (options.keepDictation) pipeline?.interrupt()
@@ -1739,19 +1726,12 @@ function registerIpc(): void {
   // 渲染层 IPC 桥接
   registerFrontendCompat()
   const desktopServices = registerDesktop({
-    getBlacklistDomains: () => getConfig().blacklistDomains,
+    getBlacklistDomains: () => effectiveBlacklistDomains(),
     cloudAccount: () => auth.userId ? { userId: auth.userId, serverUrl: syncScope(getConfig().cloudBaseUrl) } : null,
     isRecordingBusy: () => pipeline.isBusy,
     getPreferences:()=> (store?.get('app-settings' as never)??{}) as Record<string,unknown>,
     savePreferences:p=>{
       store?.set({'app-settings':{...((store?.get('app-settings' as never)??{}) as object),...p}} as never)
-      if (p.learnFromInputEdits === false) {
-        inputCorrections.stop()
-        for (const candidateId of CorrectionRepo.dismissAllInputEdits()) {
-          barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: null, candidateId, scope: DictionaryRepo.scope() })
-        }
-        shownCorrectionCapsuleId = undefined
-      }
       refreshTrayMenu()
       barPositioner?.preview(false)
       barPositioner?.refresh()
@@ -1925,18 +1905,10 @@ function registerIpc(): void {
   ipcMain.handle('history:delete', async (_e, id: string, cloud = false) => {
     if (typeof cloud !== 'boolean') throw new Error('invalid_config')
     if (cloud && !auth.userId) throw new Error('not_authenticated')
-    inputCorrections.cancel(id)
-    for (const candidateId of CorrectionRepo.dismissInputEdits(id)) {
-      barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: null, candidateId, scope: DictionaryRepo.scope() })
-    }
     await historyLifecycle.remove(id, cloud ? { userId: auth.userId!, serverUrl: syncScope(getConfig().cloudBaseUrl) } : undefined)
     return true
   })
   ipcMain.handle('history:clear', async () => {
-    inputCorrections.stop()
-    for (const candidateId of CorrectionRepo.dismissAllInputEdits()) {
-      barWindow?.webContents.send('desktop:correction-capsule-candidate', { candidate: null, candidateId, scope: DictionaryRepo.scope() })
-    }
     await historyLifecycle.clear()
     return true
   })
@@ -2054,15 +2026,8 @@ function registerIpc(): void {
   })
   ipcMain.on('window:close', event => controlledWindow(event)?.close())
   ipcMain.handle('window:is-maximized', event => controlledWindow(event)?.isMaximized() ?? false)
-  ipcMain.on('desktop:corrections-active-candidate', (event, candidateId: unknown) => {
-    if (event.sender !== barWindow?.webContents || event.senderFrame !== event.sender.mainFrame) return
-    const active = typeof candidateId === 'string' && CorrectionRepo.isPendingInputEdit(candidateId) ? candidateId : undefined
-    shownCorrectionCapsuleId = active
-    if (active) { clearTimeout(barHideTimer); barWindow?.showInactive() }
-  })
   ipcMain.handle('window:hide-bar', () => {
     if (currentVoiceState && ['preparing', 'recording', 'stopping', 'encoding', 'uploading', 'transcribing', 'refining', 'injecting'].includes(currentVoiceState.phase)) return
-    if (shownCorrectionCapsuleId && CorrectionRepo.isPendingInputEdit(shownCorrectionCapsuleId)) return
     return barWindow?.hide()
   })
 
@@ -2268,11 +2233,13 @@ if (gotLock) app.whenReady().then(async () => {
   powerMonitor.on('suspend', closeInteractiveCard)
   // store 必须在读取任何配置前就绪：热键绑定、编码器路径都依赖它
   await initStore()
+  remoteBlacklist = createRemoteBlacklist()
   auth = createAuthService()
   sync = createSyncEngine()
   pipeline = createVoicePipeline()
   await auth.initialize()
   serviceUserId = auth.userId
+  void remoteBlacklist.refresh(true)
 
   // 开发态 Dock 图标：打包后由 .app 的 icns 提供，dev 下默认是 Electron 图标
   if (process.platform === 'darwin') {
@@ -2394,6 +2361,7 @@ if (gotLock) app.whenReady().then(async () => {
   // Resume pending deletions and consume other devices' changes from the local durable cursor.
   void sync.synchronize()
   setInterval(() => { void sync.synchronize() }, 60_000).unref()
+  setInterval(() => { void remoteBlacklist?.refresh() }, 3600 * 1000).unref()
   setInterval(() => {
     void cleanupHistory()
   }, 6 * 3600 * 1000)
@@ -2420,7 +2388,6 @@ app.on('before-quit', () => {
   selectionActions?.close()
   outputAudio?.dispose()
   barPositioner?.dispose()
-  inputCorrections.stop()
   answerCards.close()
   powerLifecycle?.dispose()
   hotkeys.reset()

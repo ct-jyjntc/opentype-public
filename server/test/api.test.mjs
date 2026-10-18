@@ -1,6 +1,6 @@
 // OpenType 后端端到端测试。
 //
-// 覆盖全部协议契约：账号、PKCE、令牌轮换、同步、过滤规则、错误处理。
+// 覆盖账号、令牌轮换、同步、过滤规则、生命周期与错误处理。
 // 这些是端到端一致性的可执行证据——协议错了客户端会直接失效。
 //
 // 启动真实服务进程测试，不 mock —— mock 只能验证我以为的行为，
@@ -8,7 +8,6 @@
 
 import { spawn } from 'node:child_process'
 import { rmSync, existsSync } from 'node:fs'
-import { randomUUID, createHash } from 'node:crypto'
 
 const PORT = 19200
 const DB = '/tmp/opentype_test.db'
@@ -16,6 +15,7 @@ const BASE = `http://127.0.0.1:${PORT}`
 
 let passed = 0
 let failed = 0
+let registrationIp = 1
 
 function check(name, actual, expected) {
   const a = JSON.stringify(actual)
@@ -28,6 +28,9 @@ async function api(method, path, { body, token } = {}) {
   const headers = {}
   if (body !== undefined) headers['content-type'] = 'application/json'
   if (token) headers.authorization = `Bearer ${token}`
+  if (['/oauth/register', '/oauth/login', '/oauth/refresh_access_token', '/oauth/signin_with_email', '/oauth/verify_secret_code'].includes(path)) {
+    headers['x-real-ip'] = `198.51.100.${registrationIp++}`
+  }
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers,
@@ -47,7 +50,7 @@ const serverDir = new URL('..', import.meta.url).pathname
 // 用 process.execPath 而非 'node'：后者依赖 PATH，在某些环境下找不到
 const proc = spawn(process.execPath, ['--experimental-strip-types', 'src/index.ts'], {
   cwd: serverDir,
-  env: { ...process.env, DB_PATH: DB, PORT: String(PORT), JWT_SECRET: 'test-secret', NODE_ENV: 'development', MAIL_API_URL: '', MAIL_API_KEY: '', MAIL_FROM: '' },
+  env: { ...process.env, DB_PATH: DB, PORT: String(PORT), JWT_SECRET: 'test-secret', NODE_ENV: 'development', TRUST_PROXY: 'loopback', TURNSTILE_REQUIRED: 'false', ALLOW_DEV_EMAIL_CODES: 'true', MAIL_API_URL: '', MAIL_API_KEY: '', MAIL_FROM: '' },
   stdio: 'ignore'
 })
 
@@ -69,13 +72,14 @@ console.log('\n=== 健康检查 ===')
   const r = await fetch(`${BASE}/health`).then((x) => x.json())
   check('服务标识', r.service, 'opentype')
   check('状态正常', r.status, 'ok')
+  check('账号 API 已接通', r.account_api, 1)
 }
 
 // MARK: 账号体系
 
 console.log('\n=== 账号体系 ===')
 const email = `test-${Date.now()}@opentype.dev`
-let token, refreshToken, userId
+let token, refreshToken, userId, previousRefreshToken
 
 {
   const r = await api('POST', '/oauth/signin_with_email', { body: { email } })
@@ -149,6 +153,11 @@ console.log('\n=== 鉴权 ===')
 
 console.log('\n=== 历史同步 ===')
 {
+  const initial = await api('POST', '/transcription_history/sync_status', { token, body: {} })
+  check('新账号同步默认关闭', initial.data.sync_enabled, false)
+  const enabled = await api('POST', '/transcription_history/sync_settings', { token, body: { sync_enabled: true } })
+  check('测试账号显式启用同步', enabled.data.sync_enabled, true)
+
   const r = await api('POST', '/transcription_history/push', {
     token,
     body: {
@@ -176,7 +185,7 @@ console.log('\n=== 历史同步 ===')
   const r = await api('POST', '/transcription_history/sync_status', { token, body: {} })
   check('状态总数', r.data.total, 2)
   check('保留期默认永久', r.data.cloud_retention, -1)
-  check('同步默认开启', r.data.sync_enabled, true)
+  check('同步已显式开启', r.data.sync_enabled, true)
 }
 
 {
@@ -215,134 +224,13 @@ console.log('\n=== 保留期 ===')
 
 console.log('\n=== 令牌轮换 ===')
 {
+  previousRefreshToken = refreshToken
   const r = await api('POST', '/oauth/refresh_access_token', { body: { refresh_token: refreshToken } })
   check('刷新成功', r.status, 'OK')
   check('refresh_token 已轮换', r.data.refresh_token !== refreshToken, true)
   check('新 access_token 形状正确', r.data.access_token.split('.').length, 3)
-
-  const reuse = await api('POST', '/oauth/refresh_access_token', { body: { refresh_token: refreshToken } })
-  check('旧令牌复用被拒', reuse.status, 'ERROR')
-
   token = r.data.access_token
   refreshToken = r.data.refresh_token
-}
-
-console.log('\n=== 授权页（客户端登录入口）===')
-{
-  // GET 应返回登录表单
-  const r = await fetch(`${BASE}/login/app/auth?code_challenge=CH&state=ST&next=/login/email`)
-  const html = await r.text()
-  check('授权页 200', r.status, 200)
-  check('含登录标题', html.includes('登录 OpenType'), true)
-  check('透传 code_challenge', html.includes('value="CH"'), true)
-  check('透传 state', html.includes('value="ST"'), true)
-  check('透传 next', html.includes('value="/login/email"'), true)
-  check('无缓存头', r.headers.get('cache-control'), 'no-store')
-
-  // 缺参数应提示错误
-  const bad = await fetch(`${BASE}/login/app/auth`)
-  const badHtml = await bad.text()
-  check('缺参数提示错误', badHtml.includes('缺少'), true)
-
-  // 模式切换必须是 GET 链接，不能是 POST 表单。
-  // 曾经的 bug：POST 空邮箱触发「邮箱格式不正确」，用户还没填就报错。
-  check('模式切换用 GET 链接', html.includes('href="/login/app/auth?'), true)
-  check('模式切换不用 POST 表单', !/mode" value="(login|register)" \/>\s*<button type="submit" class="link"/.test(html), true)
-  // 注意：上面的 html 是不带 mode 的默认（登录）页，它应含「去注册」链接。
-  // 注册页的「去登录」链接在下面的切换测试里验证。
-  check('登录页含去注册链接', html.includes('没有账号'), true)
-
-  // 切换模式的 GET 请求应正常返回，不报邮箱错误
-  const sw = await fetch(`${BASE}/login/app/auth?code_challenge=CH&state=ST&next=/login/email&mode=register`)
-  const swHtml = await sw.text()
-  check('切换模式页 200', sw.status, 200)
-  check('切换模式页无邮箱错误', swHtml.includes('邮箱格式不正确'), false)
-  check('切换模式页显示注册标题', swHtml.includes('创建账号'), true)
-  check('注册页含去登录链接', swHtml.includes('已有账号'), true)
-}
-
-{
-  // POST 注册 → 重定向到深链接
-  const verifier = randomUUID() + randomUUID()
-  const challenge = createHash('sha256').update(verifier).digest('base64url')
-  const state = randomUUID()
-  const email = `page-${Date.now()}@opentype.dev`
-
-  const form = new URLSearchParams({
-    email, password: 'page-test-password', code_challenge: challenge,
-    state, next: '/login/email', mode: 'register'
-  })
-  const r = await fetch(`${BASE}/login/app/auth`, {
-    method: 'POST', body: form,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    redirect: 'manual'
-  })
-  check('注册后重定向', r.status, 302)
-  const loc = r.headers.get('location') ?? ''
-  check('重定向到深链接', loc.startsWith('opentype://auth/callback?'), true)
-  check('深链接含 code', loc.includes('code='), true)
-
-  // 从深链接提取 code 并兑换
-  const code = new URLSearchParams(loc.split('?')[1]).get('code')
-  const ex = await api('POST', '/oauth/exchange_app_login_code', {
-    body: { code, code_verifier: verifier, state }
-  })
-  check('授权码可兑换', ex.status, 'OK')
-  check('返回 access_token', ex.data.access_token.split('.').length, 3)
-
-  // 错误密码
-  const badForm = new URLSearchParams({
-    email, password: 'wrong', code_challenge: challenge, state, mode: 'login'
-  })
-  const bad = await fetch(`${BASE}/login/app/auth`, {
-    method: 'POST', body: badForm,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' }
-  })
-  const badHtml = await bad.text()
-  check('错误密码被拒', badHtml.includes('邮箱或密码不正确'), true)
-
-  // 重复注册
-  const dupForm = new URLSearchParams({
-    email, password: 'another-password', code_challenge: challenge, state, mode: 'register'
-  })
-  const dup = await fetch(`${BASE}/login/app/auth`, {
-    method: 'POST', body: dupForm,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' }
-  })
-  const dupHtml = await dup.text()
-  check('重复注册被拒', dupHtml.includes('已注册'), true)
-}
-
-console.log('\n=== PKCE 闭环 ===')
-{
-  const verifier = randomUUID() + randomUUID()
-  const challenge = createHash('sha256').update(verifier).digest('base64url')
-  const state = randomUUID()
-
-  const a = await api('POST', '/oauth/authorize', { token, body: { code_challenge: challenge, state } })
-  check('签发授权码', a.status, 'OK')
-  const code = a.data.code
-
-  const e = await api('POST', '/oauth/exchange_app_login_code', { body: { code, code_verifier: verifier, state } })
-  check('兑换成功', e.status, 'OK')
-  check('返回新 token', e.data.access_token.split('.').length, 3)
-
-  const replay = await api('POST', '/oauth/exchange_app_login_code', { body: { code, code_verifier: verifier, state } })
-  check('重放被拒', replay.detail, 'code_already_used')
-
-  // 错误 verifier
-  const a2 = await api('POST', '/oauth/authorize', { token, body: { code_challenge: challenge, state } })
-  const bad = await api('POST', '/oauth/exchange_app_login_code', {
-    body: { code: a2.data.code, code_verifier: 'wrong', state }
-  })
-  check('错误 verifier 被拒', bad.detail, 'pkce_verification_failed')
-
-  // state 不匹配
-  const a3 = await api('POST', '/oauth/authorize', { token, body: { code_challenge: challenge, state } })
-  const badState = await api('POST', '/oauth/exchange_app_login_code', {
-    body: { code: a3.data.code, code_verifier: verifier, state: 'wrong-state' }
-  })
-  check('state 不匹配被拒', badState.detail, 'state_mismatch')
 }
 
 console.log('\n=== 其他端点 ===')
@@ -399,59 +287,6 @@ console.log('\n=== 语音端点（纯文本润色路径）===')
   })
   const j = await res.json()
   check('缺音频与文本被拒', j.detail, 'audio_file_or_text_required')
-}
-
-console.log('\n=== 帮助页面 ===')
-{
-  // 前端用 <iframe src=".../help/release-notes/macos?..."> 加载，不带 Authorization 头。
-  // 这两个断言正是「不带 token 也要能拿到页面」——若走鉴权，iframe 里只会渲染 401 JSON。
-  const r = await fetch(`${BASE}/help/release-notes/macos?noHeader=1&noFooter=1&noTitle=1&lang=zh-CN`)
-  const html = await r.text()
-  check('更新说明页 200', r.status, 200)
-  check('更新说明页是 HTML', r.headers.get('content-type')?.includes('text/html'), true)
-  check('更新说明页含版本号', html.includes('0.1.0'), true)
-  check('noTitle=1 时不渲染标题', html.includes('<h1>'), false)
-
-  // 中文 lang 必须出中文文案，否则 iframe 里会出现中英混排
-  check('中文 lang 出中文', html.includes('更新说明'), true)
-
-  const en = await (await fetch(`${BASE}/help/release-notes/windows?lang=en`)).text()
-  check('英文 lang 出英文', en.includes('Release Notes'), true)
-  // 不带 noTitle 时应渲染标题
-  check('默认渲染标题', en.includes('<h1>'), true)
-
-  // 动态段：windows 平台名要原样带出，不能被写死成 macos
-  check('平台名透传', en.includes('windows'), true)
-
-  const mic = await fetch(`${BASE}/help/troubleshooting/microphone-unavailable?lang=zh-CN`)
-  const micHtml = await mic.text()
-  check('麦克风排障页 200', mic.status, 200)
-  check('排障页含步骤', micHtml.includes('系统设置'), true)
-
-  // 前缀豁免不能顺手把 /health 之类的精确路由打穿
-  const health = await fetch(`${BASE}/health`)
-  check('health 仍免鉴权', health.status, 200)
-  // 带 :param 的模板不应误匹配到其他路径
-  const bogus = await fetch(`${BASE}/help/`)
-  check('未知 help 子路径 404', bogus.status, 404)
-}
-
-console.log('\n=== 法律与联系页面 ===')
-{
-  // 渲染层「关于」与登录授权页的链接指向这三个路径（target=_blank，无鉴权头）
-  for (const name of ['privacy', 'terms', 'contact']) {
-    const r = await fetch(`${BASE}/${name}?lang=zh-CN`)
-    const html = await r.text()
-    check(`${name} 200`, r.status, 200)
-    check(`${name} 是 HTML`, r.headers.get('content-type')?.includes('text/html'), true)
-    check(`${name} 免鉴权（非 401 JSON）`, !html.startsWith('{'), true)
-  }
-  const privacyZh = await (await fetch(`${BASE}/privacy?lang=zh-CN`)).text()
-  check('隐私政策中文', privacyZh.includes('隐私政策'), true)
-  const privacyEn = await (await fetch(`${BASE}/privacy?lang=en`)).text()
-  check('隐私政策英文', privacyEn.includes('Privacy Policy'), true)
-  // 隐私承诺必须与产品实际一致：不存音频、不训练模型
-  check('隐私政策含不存音频承诺', privacyZh.includes('不在云端存储原始音频'), true)
 }
 
 console.log('\n=== 错误处理 ===')
@@ -721,6 +556,8 @@ console.log('\n=== 账号删除（A4）===')
   const delRefresh = reg.data.refresh_token
 
   await api('POST', '/user/dictionary/add', { token: delToken, body: { term: '再见' } })
+  const enabled = await api('POST', '/transcription_history/sync_settings', { token: delToken, body: { sync_enabled: true } })
+  check('删除账号测试显式启用同步', enabled.data.sync_enabled, true)
   await api('POST', '/transcription_history/push', {
     token: delToken,
     body: { records: [{ id: 'del-r1', status: 'completed', mode: 'voice_transcript', refined_text: '删号记录' }] }
@@ -749,6 +586,10 @@ console.log('\n=== 同步关闭保护 ===')
 {
   const reg = await api('POST', '/oauth/register', { body: { email: `sync-off-${Date.now()}@example.test`, password: 'synthetic-sync-password' } })
   const syncToken = reg.data.access_token
+  const initial = await api('POST', '/transcription_history/sync_status', { token: syncToken, body: {} })
+  check('同步关闭测试账号默认关闭', initial.data.sync_enabled, false)
+  const on = await api('POST', '/transcription_history/sync_settings', { token: syncToken, body: { sync_enabled: true } })
+  check('同步关闭测试显式开启', on.data.sync_enabled, true)
   const off = await api('POST', '/transcription_history/sync_settings', { token: syncToken, body: { sync_enabled: false } })
   check('关闭状态已保存', off.data.sync_enabled, false)
   const body = { records: [{ id: 'off-test', status: 'completed', mode: 'voice_transcript', refined_text: 'Synthetic private text' }] }
@@ -766,6 +607,8 @@ console.log('\n=== 增量分页不丢同批记录 ===')
 {
   const reg = await api('POST', '/oauth/register', { body: { email: `paging-${Date.now()}@example.test`, password: 'synthetic-paging-password' } })
   const pagingToken = reg.data.access_token
+  const enabled = await api('POST', '/transcription_history/sync_settings', { token: pagingToken, body: { sync_enabled: true } })
+  check('分页测试显式启用同步', enabled.data.sync_enabled, true)
   const records = Array.from({ length: 137 }, (_, i) => ({ id: `page-${i}`, status: 'completed', mode: 'voice_transcript', refined_text: `Synthetic ${i}` }))
   await api('POST', '/transcription_history/push', { token: pagingToken, body: { records } })
   for (const backwards of [false, true]) {
@@ -789,6 +632,12 @@ console.log('\n=== 增量分页不丢同批记录 ===')
   const legacy = await api('POST', '/transcription_history/pull', { token: pagingToken, body: { since: 0, limit: 7 } })
   check('旧版相同时间戳记录不被切断', legacy.data.records.length, 137)
   check('旧版相同时间戳已完整拉取', legacy.data.has_more, false)
+}
+
+{
+  // Reuse detection revokes every session, so keep this destructive check last.
+  const reuse = await api('POST', '/oauth/refresh_access_token', { body: { refresh_token: previousRefreshToken } })
+  check('旧令牌复用被拒', reuse.status, 'ERROR')
 }
 
 cleanup()

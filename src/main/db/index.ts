@@ -7,7 +7,7 @@ import { eq, desc, and, sql } from 'drizzle-orm'
 import { join, resolve } from 'node:path'
 import { existsSync, mkdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { extractCorrections, extractInputCorrections, type CorrectionPair } from '../services/correction-extraction'
+import { extractCorrections } from '../services/correction-extraction'
 import type { CorrectionCandidate, CorrectionList, CorrectionAcceptance } from '../../shared/corrections'
 import type { HistoryStats } from '../../shared/desktop'
 import { history, historyTombstones, dictionary, type HistoryStatus, type SyncStatus, type CaptureMode } from './schema'
@@ -229,6 +229,9 @@ function migrate(conn: Database.Database): void {
     source_kind: "TEXT NOT NULL DEFAULT 'history_edit'",
     source_domains: "TEXT NOT NULL DEFAULT '[]'",
   })
+  // Retire unreviewed suggestions from the removed external-edit detector.
+  // Accepted dictionary entries and their provenance remain intact.
+  conn.exec("DELETE FROM correction_candidates WHERE source_kind = 'input_edit' AND state <> 'accepted'")
 }
 
 function requireDb() {
@@ -807,65 +810,11 @@ export const DictionaryRepo = {
 const editHash = (text: string) => createHash('sha256').update(text).digest('hex')
 const canLearn = (row: HistoryRow, blacklist: string[]) => row.mode === 'voice_transcript'
   && row.status === 'completed' && !voiceContext(row.audioContext, row, blacklist).redacted
-interface CandidateRow { id: string; history_id: string; original: string; replacement: string; source_hash: string; state: string; dictionary_id: string | null; source_kind: 'history_edit' | 'input_edit'; source_domains: string }
-function learningDomainsAllowed(domains: unknown, blacklist: string[]): domains is string[] {
-  return Array.isArray(domains) && domains.length <= 64 && domains.every(d => typeof d === 'string' && !voiceContext({ web_domain: d }, {}, blacklist).redacted)
-}
+interface CandidateRow { id: string; history_id: string; original: string; replacement: string; source_hash: string; state: string; dictionary_id: string | null; source_kind: string }
 
 /** Local-only suggestions. Saving an edit and its derived proposals is atomic;
  * source deletion cascades, while explicitly accepted dictionary terms survive. */
 export const CorrectionRepo = {
-  canObserve(id: string, expected: string, blacklist: string[] = [], domains: string[] = []): boolean {
-    const row = requireDb().select().from(history).where(eq(history.id, id)).get()
-    return Boolean(row && !wasDeleted(id) && canLearn(row, blacklist) && row.editedText === null && row.refinedText === expected
-      && jsonObject(row.modeMeta).input_delivery === 'verified' && learningDomainsAllowed(domains, blacklist))
-  },
-  observeEdit(id: string, expected: string, corrected: string, blacklist: string[] = [], domains: string[] = [], validatedPairs?: CorrectionPair[]): { active: boolean; candidates: number; candidate: CorrectionCandidate | null; retractedIds: string[]; scope: string } {
-    return requireDb().transaction(() => {
-      const scope = DictionaryRepo.scope()
-      if (typeof corrected !== 'string' || corrected.length > 100_000 || !CorrectionRepo.canObserve(id, expected, blacklist, domains)) return { active: false, candidates: 0, candidate: null, retractedIds: [], scope }
-      const pairs = validatedPairs === undefined ? extractInputCorrections(expected, corrected)
-        : validatedPairs.filter(pair => pair && typeof pair.original === 'string' && typeof pair.replacement === 'string'
-          && pair.original.length > 0 && pair.replacement.length > 0 && pair.original !== pair.replacement
-          && expected.includes(pair.original) && corrected.includes(pair.replacement))
-      // Persist only word pairs, not the edited field or a new history version.
-      const retractedIds = (raw!.prepare("SELECT id FROM correction_candidates WHERE history_id = ? AND state = 'pending' AND source_kind = 'input_edit'").all(id) as { id: string }[]).map(row => row.id)
-      raw!.prepare("DELETE FROM correction_candidates WHERE history_id = ? AND state = 'pending' AND source_kind = 'input_edit'").run(id)
-      const known = new Set((raw!.prepare('SELECT term FROM dictionary WHERE user_id = ?').all(scope) as { term: string }[]).map(word => dictionaryTermKey(word.term)))
-      const insert = raw!.prepare(`INSERT OR IGNORE INTO correction_candidates
-        (id, history_id, original, replacement, source_hash, source_kind, source_domains, created_at) VALUES (?, ?, ?, ?, ?, 'input_edit', ?, ?)`)
-      let candidates = 0
-      let firstId: string | undefined
-      for (const pair of pairs) {
-        if (known.has(dictionaryTermKey(pair.replacement))) continue
-        const candidateId = crypto.randomUUID()
-        const inserted = insert.run(candidateId, id, pair.original, pair.replacement,
-          editHash(expected), JSON.stringify(domains), new Date().toISOString()).changes
-        candidates += inserted
-        if (inserted && !firstId) firstId = candidateId
-      }
-      const candidate = firstId ? raw!.prepare(`SELECT c.id, c.history_id AS historyId, c.original, c.replacement,
-        c.created_at AS createdAt, coalesce(h.focused_app_name, '') AS appName, c.source_kind AS sourceKind
-        FROM correction_candidates c JOIN history h ON h.id = c.history_id WHERE c.id = ?`).get(firstId) as CorrectionCandidate : null
-      return { active: true, candidates, candidate, retractedIds, scope }
-    })
-  },
-  dismissInputEdits(historyId: string): string[] {
-    requireDb()
-    const ids = (raw!.prepare("SELECT id FROM correction_candidates WHERE history_id = ? AND state = 'pending' AND source_kind = 'input_edit'").all(historyId) as { id: string }[]).map(row => row.id)
-    raw!.prepare("DELETE FROM correction_candidates WHERE history_id = ? AND state = 'pending' AND source_kind = 'input_edit'").run(historyId)
-    return ids
-  },
-  dismissAllInputEdits(): string[] {
-    requireDb()
-    const ids = (raw!.prepare("SELECT id FROM correction_candidates WHERE state = 'pending' AND source_kind = 'input_edit'").all() as { id: string }[]).map(row => row.id)
-    raw!.prepare("DELETE FROM correction_candidates WHERE state = 'pending' AND source_kind = 'input_edit'").run()
-    return ids
-  },
-  isPendingInputEdit(id: string): boolean {
-    requireDb()
-    return Boolean(raw!.prepare("SELECT 1 FROM correction_candidates WHERE id = ? AND state = 'pending' AND source_kind = 'input_edit' LIMIT 1").get(id))
-  },
   restoreVersion(id: string, version: 'raw' | 'processed') {
     return requireDb().transaction(() => {
       const row = requireDb().select().from(history).where(eq(history.id, id)).get()
@@ -899,7 +848,7 @@ export const CorrectionRepo = {
   list(offset = 0, historyId?: string): CorrectionList {
     requireDb()
     const skip = Math.max(0, Math.floor(Number(offset) || 0))
-    const where = "c.state = 'pending'" + (historyId ? ' AND c.history_id = ?' : '')
+    const where = "c.state = 'pending' AND c.source_kind = 'history_edit'" + (historyId ? ' AND c.history_id = ?' : '')
     const args = historyId ? [historyId] : []
     const total = (raw!.prepare(`SELECT count(*) AS count FROM correction_candidates c WHERE ${where}`).get(...args) as { count: number }).count
     const items = raw!.prepare(`SELECT c.id, c.history_id AS historyId, c.original, c.replacement,
@@ -916,18 +865,13 @@ export const CorrectionRepo = {
     if (!t || t.length > 100 || h.length > 100) throw new Error('empty_term')
     return requireDb().transaction(() => {
       const c = raw!.prepare('SELECT * FROM correction_candidates WHERE id = ?').get(id) as CandidateRow | undefined
-      if (!c || c.state === 'dismissed') throw new Error('correction_stale')
+      if (!c || c.source_kind !== 'history_edit' || c.state === 'dismissed') throw new Error('correction_stale')
       if (c.state === 'accepted') {
         if (c.dictionary_id) return { added: false, dictionaryId: c.dictionary_id }
         throw new Error('correction_stale')
       }
       const row = requireDb().select().from(history).where(eq(history.id, c.history_id)).get()
-      let domains: unknown
-      try { domains = JSON.parse(c.source_domains) } catch { throw new Error('correction_stale') }
-      if (!row || !canLearn(row, blacklist) || !learningDomainsAllowed(domains, blacklist)
-        || (c.source_kind === 'input_edit'
-          ? row.editedText !== null || editHash(row.refinedText ?? '') !== c.source_hash
-          : editHash(row.editedText ?? '') !== c.source_hash)) throw new Error('correction_stale')
+      if (!row || !canLearn(row, blacklist) || editHash(row.editedText ?? '') !== c.source_hash) throw new Error('correction_stale')
       const scope=activeDictionaryScope
       const existing = requireDb().select().from(dictionary).where(eq(dictionary.userId, scope)).all()
         .find(w => dictionaryTermKey(w.term) === dictionaryTermKey(t))

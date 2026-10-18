@@ -214,14 +214,10 @@ struct Target {
   HWND window=nullptr;DWORD pid=0;
   ComPtr<IUIAutomationElement> element;
   Snapshot original;
-  std::wstring expected,inserted;
-  std::wstring observationBase;
-  int observationStart=0,observationAfterPadding=0;
-  bool hasObservationBase=false;
+  std::wstring expected;
   std::vector<std::wstring> urls;
   bool webRedacted=false;
-  bool submitted=false,verified=false;
-  ULONGLONG observation=0;
+  bool submitted=false;
   // field: the focused control exposed a writable UI Automation text pattern,
   // so delivery is checked against its exact text and selection. Without it
   // (most Electron apps, terminals, games, Java/Qt apps) the target is the
@@ -349,7 +345,7 @@ std::string commit(Target& target,const std::wstring& text,const std::string& ht
   if(text.empty()&&(!target.field||target.original.start==target.original.end))return std::string("{\"submitted\":false,\"reason\":\"injection_empty_text\"}");
   if(modifiersHeld())throw std::runtime_error("injection_keys_held");
   if(!target.field&&typeable(target,text)){
-    target.submitted=true;target.inserted=text;
+    target.submitted=true;
     auto typed=typeText(target,text);
     if(typed.complete)return std::string("{\"submitted\":true,\"uncertain\":false,\"method\":\"windows_typing\"}");
     // Part of the text already reached the app: pasting it all again would
@@ -366,7 +362,6 @@ std::string commit(Target& target,const std::wstring& text,const std::string& ht
   try{
     // Allocate the expected document before authorizing any clipboard change.
     target.expected=target.original.value.substr(0,target.original.start)+text+target.original.value.substr(target.original.end);
-    target.inserted=text;
     if(!text.empty())clipboardLease=std::make_unique<otclip::Lease>(text,html);
     // Archiving may ask another process for its OLE data. Recheck the original
     // target after it returns, before authorizing clipboard publication.
@@ -466,12 +461,10 @@ std::string commitContextEdit(Target& target,const std::wstring& text,const std:
   const std::wstring expected=prefix+payload+suffix;
   const std::wstring beforeReplacement=applied&&edit.before?edit.before->replacement:L"";
   const std::wstring afterReplacement=applied&&edit.after?edit.after->replacement:L"";
-  target.expected=expected;target.inserted=text;target.observationBase=prefix+beforeReplacement+afterReplacement+suffix;
-  target.observationStart=static_cast<int>(prefix.size()+beforeReplacement.size());
-  target.observationAfterPadding=static_cast<int>(afterReplacement.size());target.hasObservationBase=true;
+  target.expected=expected;
   if(clipboardLease){clipboardLease->restore();if(!clipboardLease->waitForExit(4000)){
       if(strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)&&originalSelection)originalSelection->Select();
-      target.expected.clear();target.inserted.clear();target.hasObservationBase=false;
+      target.expected.clear();
       return contextResponse(false,false,"",false,fallbackReason,"injection_clipboard_unavailable");
     }clipboardLease.reset();}
   DWORD sequence=0;
@@ -485,11 +478,11 @@ std::string commitContextEdit(Target& target,const std::wstring& text,const std:
     if(modifiersHeld())throw std::runtime_error("injection_keys_held");
     if(!strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))throw std::runtime_error("injection_target_changed");
   }catch(const std::exception& error){
-    restoreClipboard();target.expected.clear();target.inserted.clear();target.hasObservationBase=false;
+    restoreClipboard();target.expected.clear();
     if(strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)&&originalSelection)originalSelection->Select();
     return contextResponse(false,false,"",false,fallbackReason,error.what());
   }catch(...){
-    restoreClipboard();target.expected.clear();target.inserted.clear();target.hasObservationBase=false;
+    restoreClipboard();target.expected.clear();
     if(strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd)&&originalSelection)originalSelection->Select();
     return contextResponse(false,false,"",false,fallbackReason,"injection_failed");
   }
@@ -508,7 +501,7 @@ std::string commitContextEdit(Target& target,const std::wstring& text,const std:
   }
   if(sent==0){
     // Nothing reached the input queue: report it unsent so the text can be delivered plainly.
-    target.submitted=false;restoreClipboard();target.expected.clear();target.inserted.clear();target.hasObservationBase=false;
+    target.submitted=false;restoreClipboard();target.expected.clear();
     if(applied&&originalSelection&&strictSnapshotMatches(target,target.original.value,expandedStart,expandedEnd))originalSelection->Select();
     return contextResponse(false,false,"",false,fallbackReason,"injection_failed");
   }
@@ -541,32 +534,9 @@ OT_EXPORT char* verifyInputTarget(const char* token){std::string id=token?token:
   // Typed or pasted into an app without a readable field: nothing to check.
   if(!target->field)return std::string("{\"status\":\"unverified\",\"blind\":true}");
   if(!focused(*target))return std::string("{\"status\":\"unverified\"}");auto value=read(target->element.Get());
-  if(normalizedLines(value.value)==normalizedLines(target->expected)){target->verified=true;return std::string("{\"status\":\"verified\"}");}
+  if(normalizedLines(value.value)==normalizedLines(target->expected))return std::string("{\"status\":\"verified\"}");
   return std::string("{\"status\":\"pending\"}");});}
 OT_EXPORT void releaseInputTarget(const char* token){std::string id=token?token:"";try{ot::system([id]{targets.erase(id);});}catch(...) {}}
-OT_EXPORT char* beginInputObservation(const char* token,const char* text){try{std::string id=token?token:"";auto inserted=ot::wide(text);return respond([id,inserted]{auto target=targetFor(id);
-  if(!target->field||!target->verified||target->inserted!=inserted||!focused(*target)||normalizedLines(read(target->element.Get()).value)!=normalizedLines(target->expected))return std::string("{\"ok\":false}");
-  target->observation=GetTickCount64();return std::string("{\"ok\":true}");});}catch(...){return ot::result("{\"ok\":false}");}}
-OT_EXPORT char* readInputObservation(const char* token){std::string id=token?token:"";return respond([id]{auto target=targetFor(id);
-  if(!target->field)return std::string("{\"active\":false,\"reason\":\"field_invalid\"}");
-  if(!target->observation||GetTickCount64()-target->observation>=60000)return std::string("{\"active\":false,\"reason\":\"expired\"}");
-  if(!IsWindow(target->window))return std::string("{\"active\":false,\"reason\":\"target_invalid\"}");
-  DWORD pid=0;GetWindowThreadProcessId(target->window,&pid);if(pid!=target->pid)return std::string("{\"active\":false,\"reason\":\"target_invalid\"}");
-  if(!ot::inputDesktopAvailable())return std::string("{\"active\":false,\"reason\":\"unavailable\"}");
-  if(GetForegroundWindow()!=target->window)return std::string("{\"active\":false,\"reason\":\"app_inactive\"}");
-  if(webURLs(target->element.Get())!=target->urls)return std::string("{\"active\":false,\"reason\":\"document_changed\"}");
-  if(!focused(*target))return std::string("{\"active\":false,\"reason\":\"field_unfocused\"}");
-  auto current=read(target->element.Get());const std::wstring& baseline=target->hasObservationBase?target->observationBase:target->original.value;
-  int baseStart=target->hasObservationBase?target->observationStart:target->original.start;
-  int baseEnd=target->hasObservationBase?target->observationStart:target->original.end;
-  auto prefix=baseline.substr(0,baseStart),suffix=baseline.substr(baseEnd);
-  if(current.value.size()<prefix.size()+suffix.size()||current.value.compare(0,prefix.size(),prefix)!=0||current.value.compare(current.value.size()-suffix.size(),suffix.size(),suffix)!=0)return std::string("{\"active\":false}");
-  size_t length=current.value.size()-prefix.size()-suffix.size();
-  int bodyEnd=static_cast<int>(prefix.size()+length);
-  bool caretAfterBody=current.start==current.end&&current.start<=bodyEnd+target->observationAfterPadding;
-  if(length>100000||current.start<static_cast<int>(prefix.size())||current.start>bodyEnd+target->observationAfterPadding||
-     (current.end>bodyEnd&&!caretAfterBody)||current.end<current.start)return std::string("{\"active\":false}");
-  return ot::object({{"active","true"},{"text",ot::quote(current.value.substr(prefix.size(),length))}});});}
 OT_EXPORT char* getSelectedText(){try{return ot::result(ot::system([]{ComPtr<IUIAutomationElement> field;auto* api=ot::automation();
   if(!api||FAILED(api->GetFocusedElement(&field)))return std::string();auto value=read(field.Get());return ot::utf8(value.value.substr(value.start,value.end-value.start));}));}catch(...){return nullptr;}}
 OT_EXPORT int insertRichText(const char* html,const char* text){try{auto value=ot::wide(text);std::string markup=html?html:"";return ot::system([value,markup]{

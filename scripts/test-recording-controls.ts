@@ -146,6 +146,7 @@ function recorderFixture(transcribe: (p: TranscribeParams)=>Promise<TranscribeRe
 await test('held native gesture reaches capture finalization and inserts exactly once', async()=>{
   const f=recorderFixture(); f.sm.handle(event('keyDown','RightCommand'));f.clock.advance(500)
   assert.equal(f.capture.isRecording,true);assert.equal(f.states.at(-1)?.stopGesture,'release')
+  await Promise.resolve()
   f.sm.handle(event('keyUp','RightCommand'));await Promise.all(f.jobs)
   assert.deepEqual(f.inserted,['test output']);assert.equal(f.capture.isBusy,false);assert.equal(f.sm.recording,false)
   f.capture.dispose()

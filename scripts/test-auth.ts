@@ -87,7 +87,9 @@ console.log('\n=== state 校验（防 CSRF / 会话固定）===')
   // state 不匹配必须拒绝
   const r2 = await svc.exchangeLoginCode('code', 'wrong-state')
   check('state 不匹配被拒', r2.detail, 'state_mismatch')
-  check('state 不匹配后清空 pending', (await svc.exchangeLoginCode('code', realState)).detail, 'no_pending_login')
+  check('state 不匹配不能取消 pending 登录', (await svc.exchangeLoginCode('code', 'wrong-state')).detail, 'state_mismatch')
+  await svc.logout()
+  check('显式登出清空 pending', (await svc.exchangeLoginCode('code', realState)).detail, 'no_pending_login')
 }
 
 console.log('\n=== token 过期判定 ===')

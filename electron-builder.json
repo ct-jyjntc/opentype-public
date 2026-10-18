@@ -1,6 +1,7 @@
 {
   "appId": "dev.opentype.desktop",
   "productName": "OpenType",
+  "afterPack": "scripts/prune-koffi-payload.cjs",
   "directories": {
     "output": "release",
     "buildResources": "build"

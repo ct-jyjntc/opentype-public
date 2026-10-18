@@ -61,9 +61,9 @@ export function DictionaryPage({ notify }: { notify: (s: string) => void }) {
       <section className="correction-panel">
         <h2>待确认的纠词建议 <span className="count">{proposals.total}</span></h2>
         
-        {!proposals.total && <p className="muted">暂时没有。你修改识别错的词后，会出现在这里。</p>}
+        {!proposals.total && <p className="muted">暂时没有。在历史记录中保存纠错后，建议会出现在这里。</p>}
         {proposals.items.map(c => <div className="correction-row" key={c.id}>
-          <div><strong>{c.original} → {c.replacement}</strong><p className="muted">{c.sourceKind === 'input_edit' ? '输入框修改' : '历史修改'} · {c.appName || 'OpenType'} · {new Date(c.createdAt).toLocaleString('zh-CN')}</p></div>
+          <div><strong>{c.original} → {c.replacement}</strong><p className="muted">历史修改 · {c.appName || 'OpenType'} · {new Date(c.createdAt).toLocaleString('zh-CN')}</p></div>
           <div className="inline">
             <button onClick={() => void openSource(c.historyId)}>查看来源</button>
             <button onClick={() => void window.opentype.desktop.corrections.dismiss(c.id).then(load).catch(e => notify(errorMessage(e)))}>忽略</button>
@@ -134,8 +134,8 @@ export function DictionaryPage({ notify }: { notify: (s: string) => void }) {
               <div>
                 <button className="text-button" onClick={() => setEditing(w)}>{w.term}</button>
                 {w.sourceKind && <div className="word-source">{w.sourceHistoryId
-                  ? <button className="text-button" onClick={() => void openSource(w.sourceHistoryId!)}>{w.sourceKind === 'input_edit' ? '输入框纠词' : '历史纠词'} · 查看来源</button>
-                  : <span className="muted">{w.sourceKind === 'input_edit' ? '输入框纠词' : '历史纠词'} · 来源已删除</span>}</div>}
+                  ? <button className="text-button" onClick={() => void openSource(w.sourceHistoryId!)}>{w.sourceKind === 'input_edit' ? '旧版输入框纠词' : '历史纠词'} · 查看来源</button>
+                  : <span className="muted">{w.sourceKind === 'input_edit' ? '旧版输入框纠词' : '历史纠词'} · 来源已删除</span>}</div>}
               </div>
               <span className="muted">{w.pronunciation || '—'}</span>
               <div className="inline">
@@ -238,7 +238,7 @@ function WordDialog({
           }
         }}
       >
-        {candidate && <p>{candidate.sourceKind === 'input_edit' ? '输入框修改' : '历史修改'}：{candidate.original} → {candidate.replacement}。</p>}
+        {candidate && <p>历史修改：{candidate.original} → {candidate.replacement}。</p>}
         <label className="field">
           词汇
           <input

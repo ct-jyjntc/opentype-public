@@ -10,7 +10,7 @@ const arch = process.argv[2]
 const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 
 if (process.platform !== 'darwin') throw new Error('macOS stable packages must be built on macOS.')
-if (version !== '0.2.2') throw new Error(`expected stable package version 0.2.2, got ${version}`)
+if (version !== '0.2.3') throw new Error(`expected stable package version 0.2.3, got ${version}`)
 if (!['x64', 'arm64'].includes(arch)) throw new Error('usage: node scripts/build-macos-stable.mjs <x64|arm64>')
 
 const env = {
@@ -90,6 +90,11 @@ const nativePaths = [
 const unexpectedSherpaArch = arch === 'x64' ? 'arm64' : 'x64'
 if (existsSync(join(unpacked, `sherpa-onnx-darwin-${unexpectedSherpaArch}`))) {
   throw new Error(`packaged app contains sherpa-onnx-darwin-${unexpectedSherpaArch}`)
+}
+const koffiPlatforms = await readdir(join(unpacked, 'koffi', 'build', 'koffi'))
+const expectedKoffiPlatform = arch === 'x64' ? 'darwin_x64' : 'darwin_arm64'
+if (koffiPlatforms.length !== 1 || koffiPlatforms[0] !== expectedKoffiPlatform) {
+  throw new Error(`unexpected Koffi platform payload: ${koffiPlatforms.join(', ')}`)
 }
 for (const path of nativePaths) requireArch(path, arch === 'x64' ? 'x86_64' : 'arm64')
 const feedName = 'latest-mac.yml'

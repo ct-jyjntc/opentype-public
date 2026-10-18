@@ -16,7 +16,7 @@ try {
   const bundle = `node_modules/.cache/test-${suite}.mjs`
   execFileSync(resolve('node_modules/.bin/esbuild'), [`scripts/test-${suite}-electron.ts`, '--bundle', '--platform=node', '--format=esm', `--outfile=${bundle}`, '--external:better-sqlite3', '--external:drizzle-orm', '--external:undici', '--log-level=warning'], { stdio: 'inherit' })
   server = spawn(process.execPath, ['--experimental-strip-types', 'src/index.ts'], {
-    cwd: resolve('server'), env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), DB_PATH: join(directory, 'server.db'), JWT_SECRET: 'isolated-cloud-delete-test', NODE_ENV: 'development', MAIL_API_URL: '', MAIL_API_KEY: '', MAIL_FROM: '' },
+    cwd: resolve('server'), env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), DB_PATH: join(directory, 'server.db'), JWT_SECRET: 'isolated-cloud-delete-test', NODE_ENV: 'development', TURNSTILE_REQUIRED: 'false', ALLOW_DEV_EMAIL_CODES: 'true', MAIL_API_URL: '', MAIL_API_KEY: '', MAIL_FROM: '' },
     stdio: 'ignore',
   })
   let ready = false

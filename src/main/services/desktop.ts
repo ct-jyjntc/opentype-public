@@ -49,7 +49,6 @@ export function readPreferences(value: Record<string, unknown>): Preferences {
       typeof value.personalStyle === 'string' ? value.personalStyle : '',
     usePersonalStyle: value.usePersonalStyle === true,
     learnFromEdits: value.learnFromEdits !== false,
-    learnFromInputEdits: value.learnFromInputEdits === true,
     outputPreferences: readOutputPreferences(value.outputPreferences),
     appExpressions: readAppExpressions(value.appExpressions),
     skills: readSkillSettings(value.skills),
@@ -142,7 +141,6 @@ export function registerDesktop(
     if (typeof patch.usePersonalStyle === 'boolean')
       next.usePersonalStyle = patch.usePersonalStyle
     if (typeof patch.learnFromEdits === 'boolean') next.learnFromEdits = patch.learnFromEdits
-    if (typeof patch.learnFromInputEdits === 'boolean') next.learnFromInputEdits = patch.learnFromInputEdits
     if (typeof patch.launchAtLogin === 'boolean') {
       if (!preview) app.setLoginItemSettings({ openAtLogin: patch.launchAtLogin })
       next.launchAtLogin = preview ? patch.launchAtLogin : app.getLoginItemSettings().openAtLogin
@@ -336,8 +334,12 @@ export function registerDesktop(
     if (!parsed.success) return parsed
     dictionaryScope(scope)
     const words = parseLocalDictionaryRows(parsed.words.join('\n'))
-    const unique = [...new Map(words.map(w=>[dictionaryTermKey(w.term),w])).values()]
-    const result=DictionaryRepo.importPortable(unique.map(w=>({term:w.term,pronunciation:w.hint})),'keep',()=>{})
+    const unique = new Map<string, (typeof words)[number]>()
+    for (const word of words) {
+      const key = dictionaryTermKey(word.term)
+      if (!unique.has(key)) unique.set(key, word)
+    }
+    const result=DictionaryRepo.importPortable([...unique.values()].map(w=>({term:w.term,pronunciation:w.hint})),'keep',()=>{})
     return {
       success: true,
       added: result.added,

@@ -21,7 +21,12 @@ async function account(name: string) {
   const res = await request(baseUrl + '/oauth/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: `${name}@isolated.invalid`, password: 'synthetic-test-password' }) })
   const data = await res.body.json() as any
   assert.equal(data.status, 'OK')
-  return { userId: data.data.user_id as string, token: data.data.access_token as string, serverUrl: baseUrl }
+  const token = data.data.access_token as string
+  const initial = await api('sync_status', {}, token)
+  assert.equal(initial.data.sync_enabled, false)
+  const enabled = await api('sync_settings', { sync_enabled: true }, token)
+  assert.equal(enabled.data.sync_enabled, true)
+  return { userId: data.data.user_id as string, token, serverUrl: baseUrl }
 }
 const a = await account('lifecycle-a'), b = await account('lifecycle-b'), timer = await account('lifecycle-timer')
 const serverDb = new Database(join(root, 'server.db'))
@@ -178,7 +183,10 @@ try {
   assert.equal((await api('push', { records: [wire('boundary-push')], cloud_epoch: epoch }, a.token)).data.rejected[0].reason, 'cloud_record_evicted')
   ok('read, backfill, status and upload boundaries enforce expiry without manual settings changes')
 
-  for (const body of [null, [], 'invalid', 7, { cloud_retention: 0 }, { cloud_retention: '7' }, { cloud_retention: 1 }, { sync_enabled: 1 }]) {
+  for (const body of [null, [], 'invalid', 7]) {
+    assert.equal((await api('sync_settings', body, a.token)).detail, 'invalid_json_object')
+  }
+  for (const body of [{ cloud_retention: 0 }, { cloud_retention: '7' }, { cloud_retention: 1 }, { sync_enabled: 1 }]) {
     assert.equal((await api('sync_settings', body, a.token)).detail, 'invalid_sync_settings')
   }
   for (const body of [{}, { request_id: '../bad' }, { request_id: 123 }]) assert.equal((await api('wipe', body, a.token)).detail, 'invalid_wipe_request')

@@ -11,7 +11,7 @@ import { dictionaryTermKey } from '../db/dictionary-sync'
 // recordings, device IDs and system launch/Dock switches are deliberately absent.
 const keys = ['interactionSounds','audioProcessing','outputAudio','floatingBar','recordingActivation',
   'selectedLanguages','featureShortcutBindings','appearance','personalStyle','usePersonalStyle',
-  'learnFromEdits','learnFromInputEdits','outputPreferences','appExpressions','skills'] as const
+  'learnFromEdits','outputPreferences','appExpressions','skills'] as const
 function portable(value: Preferences | Record<string, unknown>): Partial<Preferences> {
   const result: Record<string, unknown> = {}
   for (const key of keys) if (Object.hasOwn(value,key)) result[key] = value[key]

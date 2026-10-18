@@ -10,7 +10,6 @@ import { existsSync } from 'node:fs'
 import { app, screen, systemPreferences } from 'electron'
 import { createKeyboardMonitor } from './keyboard'
 import type { InputDeliveryNative, InputSnapshot } from '../services/input-delivery'
-import type { InputObservationNative } from '../services/input-corrections'
 import type { ContextEdit } from '../services/providers/types'
 export type { KeyEvent } from './keyboard'
 
@@ -55,6 +54,7 @@ const _getSelectedText = inputLib.func('getSelectedText', voidPtr, [])
 const _getCurrentInputState = inputLib.func('getCurrentInputState', voidPtr, [])
 const _captureInputTarget = inputLib.func('captureInputTarget', voidPtr, [])
 const _captureCommandTarget = inputLib.func('captureCommandTarget', voidPtr, [])
+const _captureInputTargetForProcess = process.platform === 'darwin' ? inputLib.func('captureInputTargetForProcess', voidPtr, [int, int]) : undefined
 const _prepareInputTarget = inputLib.func('prepareInputTarget', voidPtr, [str])
 const _inputTargetDiagnostics = process.platform === 'darwin' ? inputLib.func('inputTargetDiagnostics', voidPtr, [str]) : undefined
 const traces = new Map<string, string>()
@@ -65,8 +65,6 @@ try { _commitInputTargetWithContextEdit = inputLib.func('commitInputTargetWithCo
 catch { /* Older native helpers retain plain delivery until rebuilt. */ }
 const _verifyInputTarget = inputLib.func('verifyInputTarget', voidPtr, [str])
 const _releaseInputTarget = inputLib.func('releaseInputTarget', 'void', [str])
-const _beginInputObservation = inputLib.func('beginInputObservation', voidPtr, [str, str])
-const _readInputObservation = inputLib.func('readInputObservation', voidPtr, [str])
 const _restoreNativeClipboard = process.platform === 'win32' ? inputLib.func('restoreNativeClipboard', 'void', []) : undefined
 
 /** 把 C 返回的 char* 读成字符串并立刻释放，避免跨运行时内存泄漏。 */
@@ -79,10 +77,12 @@ function consume(ptr: unknown): string | null {
 
 export const InputHelper = {
   restoreClipboard() { _restoreNativeClipboard?.() },
-  captureTarget(allowReadOnlySelection = false, traceId: string = randomUUID()): InputSnapshot {
+  captureTarget(allowReadOnlySelection = false, traceId: string = randomUUID(), expectedPid?: number): InputSnapshot {
     recordInputDiagnostic(traceId, 'capture-start')
     try {
-      const raw = consume(allowReadOnlySelection ? _captureCommandTarget() : _captureInputTarget())
+      const raw = consume(expectedPid && _captureInputTargetForProcess
+        ? _captureInputTargetForProcess(expectedPid, allowReadOnlySelection ? 1 : 0)
+        : allowReadOnlySelection ? _captureCommandTarget() : _captureInputTarget())
       if (!raw) throw new Error('empty_bridge_result')
       const target = JSON.parse(raw) as InputSnapshot & { diagnostics?: Record<string, unknown> }
       if (!target || typeof target !== 'object' || Array.isArray(target)) throw new Error('invalid_bridge_result')
@@ -121,12 +121,6 @@ export const InputHelper = {
     if (!raw) return null
     try { return JSON.parse(raw) } catch { return null }
   }
-}
-
-export const InputObservation: InputObservationNative = {
-  begin: (token, text) => JSON.parse(consume(_beginInputObservation(token, text)) ?? '{}'),
-  read: token => JSON.parse(consume(_readInputObservation(token)) ?? '{}'),
-  release: token => { _releaseInputTarget(token); traces.delete(token) },
 }
 
 function deliveryJSON(value: unknown) {

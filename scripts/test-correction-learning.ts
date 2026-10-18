@@ -177,5 +177,36 @@ try {
     await HistoryRepo.clear()
     await DictionaryRepo.remove('local', accepted.dictionaryId)
   })
+  await test('removing external-edit learning retires old proposals and preserves accepted words', async () => {
+    await seed('legacy-input'); await seed('legacy-accepted'); await seed('history-kept')
+    CorrectionRepo.saveEdit('history-kept', edited, true)
+    await DictionaryRepo.add('local', 'AcceptedName', 'OriginalName')
+    const legacyWordId = (await DictionaryRepo.list('local')).find(w => w.term === 'AcceptedName')!.id
+    const legacy = new Database(join(dir, 'db/opentype.db'))
+    const insert = legacy.prepare(`INSERT INTO correction_candidates
+      (id, history_id, original, replacement, source_hash, source_kind, state, dictionary_id, created_at)
+      VALUES (?, ?, ?, ?, 'legacy-hash', 'input_edit', ?, ?, '2026-01-01')`)
+    insert.run('old-pending', 'legacy-input', '欧朋太谱', 'OpenType', 'pending', null)
+    insert.run('old-dismissed', 'legacy-input', 'OtherName', 'NewName', 'dismissed', null)
+    legacy.prepare("UPDATE dictionary SET source_history_id = 'legacy-accepted', source_kind = 'input_edit' WHERE id = ?").run(legacyWordId)
+    insert.run('old-accepted', 'legacy-accepted', 'OriginalName', 'AcceptedName', 'accepted', legacyWordId)
+    legacy.close()
+    assert.equal(CorrectionRepo.list(0, 'legacy-input').total, 0)
+    assert.throws(() => CorrectionRepo.accept('old-pending', 'OpenType', ''), /correction_stale/)
+    closeDatabase(); initDatabase(join(dir, 'db'))
+    const check = new Database(join(dir, 'db/opentype.db'))
+    assert.equal(check.prepare("SELECT id FROM correction_candidates WHERE id = 'old-pending'").get(), undefined)
+    assert.equal(check.prepare("SELECT id FROM correction_candidates WHERE id = 'old-dismissed'").get(), undefined)
+    assert(check.prepare("SELECT id FROM correction_candidates WHERE id = 'old-accepted'").get())
+    check.close()
+    const word = (await DictionaryRepo.list('local')).find(w => w.id === legacyWordId)!
+    assert.equal(word.term, 'AcceptedName'); assert.equal(word.pronunciation, 'OriginalName')
+    assert.equal(word.sourceKind, 'input_edit'); assert.equal(word.sourceHistoryId, 'legacy-accepted')
+    assert.equal(CorrectionRepo.list(0, 'history-kept').total, 1)
+    assert.equal(CorrectionRepo.saveEdit('legacy-input', edited, true).candidates, 1)
+    const proposal = CorrectionRepo.list(0, 'legacy-input').items[0]
+    assert.equal(proposal.sourceKind, 'history_edit')
+    assert.equal(CorrectionRepo.accept(proposal.id, proposal.replacement, proposal.original).added, true)
+  })
   console.log(`${count} correction learning scenarios passed`)
 } finally { closeDatabase(); rmSync(dir, { recursive: true, force: true }) }

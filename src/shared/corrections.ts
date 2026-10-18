@@ -5,7 +5,7 @@ export interface CorrectionCandidate {
   replacement: string
   createdAt: string
   appName: string
-  sourceKind: 'history_edit' | 'input_edit'
+  sourceKind: 'history_edit'
 }
 export interface CorrectionList { items: CorrectionCandidate[]; total: number; hasMore: boolean }
 export interface HistoryEditResult { candidates: number }

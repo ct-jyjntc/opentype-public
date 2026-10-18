@@ -1,7 +1,31 @@
 import assert from 'node:assert/strict'
-import { deliverToInput, type InputDeliveryNative } from '../src/main/services/input-delivery'
+import { captureReadableInput, deliverToInput, type InputDeliveryNative, type InputSnapshot } from '../src/main/services/input-delivery'
 let count = 0
 async function test(name: string, run: () => Promise<void>) { await run(); count++; console.log('OK ' + name) }
+await test('initial Chromium AX bootstrap retries before preserving a readable insertion baseline',async()=>{
+  let captures=0;const released:string[]=[],pids:(number|undefined)[]=[]
+  const result=await captureReadableInput(pid=>{pids.push(pid);captures++;return {pid:42,appName:'Test',bundleId:'test.editor',token:'t'+captures,canVerify:captures===3,contextRedacted:captures!==3} },token=>released.push(token),new AbortController().signal,async()=>{})
+  assert.equal(result.token,'t3');assert.equal(result.contextRedacted,false);assert.deepEqual(released,['t1','t2']);assert.deepEqual(pids,[undefined,42,42])
+})
+await test('unreadable applications have a bounded fallback and keep exactly one owned token',async()=>{
+  let captures=0;const released:string[]=[]
+  const result=await captureReadableInput(()=>({pid:42,appName:'Test',bundleId:'test.editor',token:'t'+(++captures),canVerify:false}),token=>released.push(token),new AbortController().signal,async()=>{})
+  assert.equal(captures,13);assert.equal(result.token,'t13');assert.equal(released.length,12)
+})
+await test('capture cancellation, native failure and process switch release incomplete snapshots',async()=>{
+  for(const action of ['cancel','throw','switch'] as const){
+    const controller=new AbortController(),released:string[]=[];let captures=0
+    const run=()=>captureReadableInput(()=>{captures++;if(captures>1&&action==='throw')throw Error('read failed');return {pid:captures>1&&action==='switch'?43:42,appName:'Test',bundleId:'test.editor',token:'t'+captures,canVerify:false}},token=>released.push(token),controller.signal,async()=>{if(action==='cancel')controller.abort()})
+    if(action==='switch'){const result=await run();assert.equal(result.reason,'injection_app_changed');assert(!result.token);assert.deepEqual(released,['t1','t2'])}
+    else{await assert.rejects(run());assert.deepEqual(released,['t1'])}
+  }
+})
+await test('readable fields, read-only selections, and denied targets do not retry or discard context',async()=>{
+  for(const snapshot of [ {pid:42,appName:'Test',bundleId:'test.editor',token:'t',canVerify:true}, {pid:42,appName:'Test',bundleId:'test.editor',canVerify:false,selectionReadOnly:true,selectedText:'Read-only text'}, {pid:42,appName:'Test',bundleId:'test.editor',reason:'injection_permission'} ] satisfies InputSnapshot[]){
+    let captures=0;const result=await captureReadableInput(()=>{captures++;return snapshot},()=>{throw Error('unexpected release')},new AbortController().signal,async()=>{})
+    assert.equal(captures,1);assert.deepEqual(result,snapshot)
+  }
+})
 function fixture(overrides: Partial<InputDeliveryNative> = {}) {
   const calls: string[] = [], controller = new AbortController()
   const native: InputDeliveryNative = {
@@ -10,7 +34,8 @@ function fixture(overrides: Partial<InputDeliveryNative> = {}) {
     commit: () => { calls.push('commit'); return { submitted: true, method: 'accessibility' } },
     verify: () => { calls.push('verify'); return { status: 'verified' } }, ...overrides,
   }
-  const run = (pause: (ms: number) => Promise<void> = async () => {}) => deliverToInput(native, { token: 'original-window-field' }, 'new text', controller.signal, pause)
+  const run = (pause: (ms: number) => Promise<void> = async () => {}) =>
+    deliverToInput(native, { token: 'original-window-field' }, 'new text', controller.signal, undefined, pause)
   return { native, calls, controller, run }
 }
 await test('confirmed input is committed once to the captured token, after readiness', async () => {

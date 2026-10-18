@@ -54,7 +54,8 @@ app.whenReady().then(async () => {
             'term,hint',
             'OpenType,open type',
             '"Acme, Inc.",acme',
-            'OpenType,duplicate',
+            'opentype,duplicate',
+            'typescript,do not overwrite existing hint',
           ],
         }),
         changed: () => changes++,
@@ -87,6 +88,9 @@ app.whenReady().then(async () => {
       'open type',
     )
     assert(words.some((w: any) => w.term === 'Acme, Inc.'))
+    assert.equal(words.find((w: any) => w.term === 'TypeScript').pronunciation, 'type script')
+    assert.equal((await call('dictionary-import')).added, 0)
+    assert.deepEqual(await call('dictionary-list'), words)
     await call('dictionary-save', {
       id: words[0].id,
       term: 'Edited',
@@ -98,7 +102,7 @@ app.whenReady().then(async () => {
     await call('dictionary-remove', words[0].id)
     assert.equal((await call('dictionary-list')).length, 2)
     console.log(
-      'OK local dictionary CRUD, case-insensitive duplicate detection, CSV quotes/header/hints',
+      'OK local dictionary CRUD, CSV quotes/header/hints, first duplicate preserved, existing words kept, repeat import unchanged',
     )
     await call('preferences', {
       selectedLanguages: ['zh-CN'],
@@ -211,10 +215,9 @@ app.whenReady().then(async () => {
     console.log('OK deleted history cannot be restored by a late desktop retry')
     await HistoryRepo.upsert({ id: 'learning-api', status: 'completed', mode: 'voice_transcript', refinedText: 'Use Opentipe today.', focusedAppName: 'Test editor', focusedAppBundleId: 'test.editor' })
     assert.equal((await call('snapshot')).preferences.learnFromEdits, true)
-    assert.equal((await call('snapshot')).preferences.learnFromInputEdits, false)
+    assert(!Object.hasOwn((await call('snapshot')).preferences, 'learnFromInputEdits'))
     await call('preferences', { learnFromInputEdits: true })
-    assert.equal((await call('snapshot')).preferences.learnFromInputEdits, true)
-    await call('preferences', { learnFromInputEdits: false })
+    assert(!Object.hasOwn((await call('snapshot')).preferences, 'learnFromInputEdits'))
     await call('preferences', { learnFromEdits: false })
     assert.equal((await call('history-edit', 'learning-api', 'Use OpenType today.')).candidates, 0)
     await call('preferences', { learnFromEdits: true })

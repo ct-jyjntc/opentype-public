@@ -18,7 +18,7 @@ function sanitize(metadata: Record<string, unknown>) {
     else if (typeof value === 'string') {
       if ((key === 'frontBundleId' || key === 'targetBundleId') && !/^[a-zA-Z0-9._-]{0,160}$/.test(value)) continue
       if (key === 'role' && !/^AX[a-zA-Z0-9]{1,80}$/.test(value)) continue
-      if (key === 'focusSource' && !['system', 'application', 'none'].includes(value)) continue
+      if (key === 'focusSource' && !['system', 'application', 'window', 'none'].includes(value)) continue
       if (key === 'method' && !['clipboard', 'accessibility', 'unknown'].includes(value)) continue
       if (key === 'status' && !['verified', 'unverified', 'pending'].includes(value)) continue
       safe[key] = value.slice(0, 160)

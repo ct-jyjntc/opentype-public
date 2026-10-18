@@ -23,7 +23,7 @@ try {
     pool.intercept({ path: '/chat/completions', method: 'POST' }).reply(options => {
       const body = JSON.parse(String(options.body))
       assert.equal(body.model, 'deepseek-flash'); assert.deepEqual(body.thinking, { type: 'disabled' })
-      assert.equal(body.stream, false)
+      assert.equal(body.stream, true)
       assert(!String(options.body).includes('SYNTHETIC_AUDIO'))
       assert(!String(options.body).includes('SYNTHETIC_PRIVATE_CONTEXT'))
       assert.equal(JSON.parse(body.messages[1].content).transcript, '原文')

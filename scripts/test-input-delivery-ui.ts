@@ -9,8 +9,6 @@ import { tmpdir } from 'node:os'
 import { AnswerCardSession } from '../src/main/services/answer-card'
 import { CaptureSession } from '../src/main/services/capture-session'
 import { capturedContext } from '../src/main/services/capture-context'
-import { InputCorrections } from '../src/main/services/input-corrections'
-import { initDatabase, closeDatabase, HistoryRepo, CorrectionRepo } from '../src/main/db'
 import type { CardPayload } from '../src/shared/desktop'
 import { deliverToInput, type InputSnapshot } from '../src/main/services/input-delivery'
 mkdirSync('tmp/input-delivery',{recursive:true})
@@ -22,12 +20,8 @@ writeFileSync('tmp/input-delivery/ui-directory.txt',dir)
 writeFileSync(join(dir,'preload.cjs'),`const {contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('qa',{capture:mode=>ipcRenderer.send('qa:capture',mode),deliver:()=>ipcRenderer.send('qa:deliver'),show:n=>ipcRenderer.send('qa:show',n),onState:cb=>ipcRenderer.on('qa:state',(_,s)=>cb(s))})`)
 writeFileSync(join(dir,'index.html'),readFileSync('scripts/fixtures/input-delivery.html','utf8'))
 app.whenReady().then(async()=>{
-  const {InputHelper,InputDelivery,InputObservation}=await import('../src/main/native/ffi')
+  const {InputHelper,InputDelivery}=await import('../src/main/native/ffi')
   const report=(value:unknown)=>{events.push(value);for(const w of windows.values())if(!w.isDestroyed())w.webContents.send('qa:state',JSON.stringify(value));writeFileSync(resolve('tmp/input-delivery/ui-results.json'),JSON.stringify(events,null,2)+'\n')}
-  if (process.argv.includes('--learning')) initDatabase(join(dir,'history.db'))
-  const inputCorrections = new InputCorrections({native:{...InputObservation,read:token=>{const result=InputObservation.read(token);if(!result.active)report({action:'observation-stop',reason:result.reason});return result},release:token=>{InputObservation.release(token);report({action:'observation-ended'})}},enabled:()=>true,
-    allowed:(id,text,target)=>CorrectionRepo.canObserve(id,text,[],target.inputWebDomains),
-    save:(id,text,after,target)=>{const saved=CorrectionRepo.observeEdit(id,text,after,[],target.inputWebDomains);report({action:'input-corrections',...saved,items:CorrectionRepo.list(0,id).items});return saved.active}})
   let card: BrowserWindow | undefined, cardPayload: CardPayload | null = null
   const records = new Map<string, any>()
   const answers = new AnswerCardSession({
@@ -70,28 +64,15 @@ app.whenReady().then(async()=>{
     })
     await session.onStart();session.pushAudio(new Float32Array(1600),16000,0);await session.onStop()
   }
-  const dictate = async (captured: InputSnapshot) => {
-    busy=true
-    const session = new CaptureSession({provider:{name:'synthetic-dictation',transcribe:async()=>({success:true,text:'Please use Opentipe and SenceVoice today.',rawText:'Please use Opentipe and SenceVoice today.'})},
-      getConfig:()=>({mode:'voice_transcript',outputLanguage:'zh',asrLanguage:'zh',autoInject:true,blacklistDomains:[],appVersion:'test'}),
-      context:()=>capturedContext(captured,[]),notify:state=>{if(state.phase==='done'||state.phase==='error')report({action:'capture-result',phase:state.phase,detail:state.detail})},flush:async()=>{},saveAudio:async()=>'/synthetic/no-audio.wav',
-      saveHistory:record=>HistoryRepo.upsert(record),loadHistory:id=>HistoryRepo.byId(id),
-      inject:(text,target,signal)=>deliverToInput(InputDelivery,{token:target.inputToken},text,signal),
-      observeInput:(id,text,target)=>{const observing=inputCorrections.start(id,text,target);report({action:'observation-started',observing,id});return observing},
-      releaseTarget:target=>{if(target.inputToken)InputHelper.releaseTarget(target.inputToken)},showCard:()=>{},changed:()=>{},personalization:async()=>({})})
-    try {await session.onStart();session.pushAudio(new Float32Array(1600),16000,0);await session.onStop()} finally {busy=false;session.dispose()}
-  }
-  app.on('will-quit',()=>{inputCorrections.stop();answers.close();if(process.argv.includes('--learning'))closeDatabase()})
+  app.on('will-quit',()=>answers.close())
   const capture = (pid: number, mode = 'dictation') => {
     if (busy) return
     const foreground = InputHelper.getCurrentInputState()?.pid
     if (foreground !== pid) { report({action:'capture',reason:'not_test_window',expectedPid:pid,foregroundPid:foreground}); return }
-    inputCorrections.stop()
     if (snapshot?.token) InputHelper.releaseTarget(snapshot.token)
     snapshot = InputHelper.captureTarget(mode === 'command')
     report({action:'capture',mode,selectionReadOnly:snapshot.selectionReadOnly,contextRedacted:snapshot.contextRedacted,available:!!snapshot.token,reason:snapshot.reason,selectedText:snapshot.selectedText,hasContext:!!snapshot.contextText,role:snapshot.role,webUrl:snapshot.webUrl,webUrls:snapshot.webUrls})
     if (process.argv.includes('--answers') && mode === 'command') { const captured = snapshot; snapshot = undefined; void ask(captured) }
-    if (process.argv.includes('--learning') && mode === 'dictation') { const captured = snapshot; snapshot = undefined; void dictate(captured) }
   }
   ipcMain.on('qa:show',(_e,name)=>windows.get(name)?.show())
   ipcMain.on('qa:capture',async (event, mode)=>{
@@ -143,7 +124,7 @@ app.whenReady().then(async()=>{
     writeFileSync(join(bundle,'Contents/Info.plist'), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.opentype.input-qa</string><key>CFBundleName</key><string>OpenType Native QA</string><key>CFBundleExecutable</key><string>InputQA</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`)
     const binary = join(bundle,'Contents/MacOS/InputQA')
     execFileSync('swiftc',['scripts/native-input-delivery-fixture.swift','-o',binary])
-    const native = spawn(binary,[dir,...(process.argv.includes('--simulate-correction')?['--simulate-correction']:[])],{stdio:'inherit'})
+    const native = spawn(binary,[dir],{stdio:'inherit'})
     let lastRequest = ''
     const watcher = watch(dir,(_event,name)=>{
       if (name !== 'native-request.json') return

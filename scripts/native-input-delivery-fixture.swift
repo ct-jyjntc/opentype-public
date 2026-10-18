@@ -16,9 +16,7 @@ final class Fixture: NSObject, NSApplicationDelegate {
         window = NSWindow(contentRect: NSRect(x: 360, y: 260, width: 680, height: 360), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "OpenType 原生交付测试"; window.isReleasedWhenClosed = false
         let content = window.contentView!
-        let label = NSTextField(labelWithString: CommandLine.arguments.contains("--simulate-correction")
-            ? "模拟纠错测试：点击捕获后，测试窗口会自动聚焦并改正合成错词。不是真人打字或语音验收。"
-            : "仅使用此临时编辑器中的合成文字。选中表情后点击捕获，再切换到 Electron 交付。")
+        let label = NSTextField(labelWithString: "仅使用此临时编辑器中的合成文字。选中表情后点击捕获，再切换到 Electron 交付。")
         label.frame = NSRect(x: 20, y: 300, width: 640, height: 40); label.maximumNumberOfLines = 2; content.addSubview(label)
         let scroll = NSScrollView(frame: NSRect(x: 20, y: 100, width: 640, height: 190))
         editor = NSTextView(frame: scroll.bounds)
@@ -37,22 +35,7 @@ final class Fixture: NSObject, NSApplicationDelegate {
     }
     @objc func captureTarget() {
         window.makeKeyAndOrderFront(nil); window.makeFirstResponder(editor); NSApp.activate(ignoringOtherApps: true)
-        if CommandLine.arguments.contains("--simulate-correction") {
-            // CUA may restore its caller as foreground after an action. This
-            // explicitly labelled fixture scenario activates its own test
-            // window after that action and simulates an in-app text edit.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                self.window.makeKeyAndOrderFront(nil); self.window.makeFirstResponder(self.editor); NSApp.activate(ignoringOtherApps: true)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.send("capture") }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    let before = "Please use Opentipe and SenceVoice today."
-                    let after = "Please use OpenType and SenseVoice today."
-                    let range = (self.editor.string as NSString).range(of: before)
-                    guard range.location != NSNotFound else { return }
-                    self.editor.insertText(after, replacementRange: range)
-                }
-            }
-        } else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.send("capture") } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.send("capture") }
     }
     @objc func deliverTarget() {
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)

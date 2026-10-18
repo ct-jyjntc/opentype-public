@@ -28,7 +28,7 @@ jobs:
           RELEASE_GITHUB_TOKEN: ${{ github.token }}
         run: |
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-          test "$(node -p "require('./package.json').version")" = "0.2.2"
+          test "$(node -p "require('./package.json').version")" = "0.2.3"
           node -e "fetch('https://api.github.com/repos/ct-jyjntc/opentype-public/commits/' + process.env.RELEASE_SHA, {headers:{'User-Agent':'OpenType-release-builder','Authorization':'Bearer ' + process.env.RELEASE_GITHUB_TOKEN}}).then(async r => { if (!r.ok || (await r.json()).sha !== process.env.RELEASE_SHA) process.exit(1) })"
       - name: Download and verify pinned SenseVoice model
         env:
@@ -76,7 +76,7 @@ jobs:
           $remote = Invoke-RestMethod -Headers @{ 'User-Agent'='OpenType-release-builder'; 'Authorization'="Bearer $env:RELEASE_GITHUB_TOKEN" } -Uri "https://api.github.com/repos/ct-jyjntc/opentype-public/commits/$env:RELEASE_SHA"
           if ($remote.sha -ne $env:RELEASE_SHA) { throw 'The source commit is not confirmed by the GitHub API.' }
           if ((node -p 'process.arch').Trim() -ne $env:EXPECTED_ARCH) { throw 'Node is not running natively for the package architecture.' }
-          if ((node -p "require('./package.json').version").Trim() -ne '0.2.2') { throw 'The package version is not 0.2.2.' }
+          if ((node -p "require('./package.json').version").Trim() -ne '0.2.3') { throw 'The package version is not 0.2.3.' }
       - name: Restore the single verified model copy
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v6.0.0
         with:
@@ -227,7 +227,7 @@ jobs:
           })().catch(error => { console.error(error); process.exitCode=1 });
           '@
           Set-Content -Path $asrScript -Value $asrSource -Encoding utf8NoBOM
-          $output = Join-Path 'release/staging/0.2.2' "windows-$env:PACKAGE_ARCH"
+          $output = Join-Path 'release/staging/0.2.3' "windows-$env:PACKAGE_ARCH"
           $unpackedDirName = if ($env:PACKAGE_ARCH -eq 'arm64') { 'win-arm64-unpacked' } else { 'win-unpacked' }
           $unpackedRoot = Join-Path $output $unpackedDirName
           Write-Host "Electron Builder unpacked directory for $env:PACKAGE_ARCH`: $unpackedRoot"
@@ -236,7 +236,7 @@ jobs:
           $addon = Join-Path $unpackedRoot "resources/app.asar.unpacked/node_modules/sherpa-onnx-win-$env:PACKAGE_ARCH/sherpa-onnx.node"
           if (-not (Test-Path $addon)) { throw "Packaged ASR addon is missing: $addon" }
           $installDir = [IO.Path]::GetFullPath((Join-Path 'tmp' 'release-${{ github.run_id }}/installed-${{ matrix.arch }}'))
-          $installer = Join-Path $output "OpenType-0.2.2-Windows-$env:PACKAGE_ARCH.exe"
+          $installer = Join-Path $output "OpenType-0.2.3-Windows-$env:PACKAGE_ARCH.exe"
           $installerStarted = Get-Date
           $installerStartError = $null
           $install = $null
@@ -303,12 +303,12 @@ jobs:
           PACKAGE_ARCH: ${{ matrix.arch }}
         run: |
           $taskDir = Join-Path 'tmp' 'release-${{ github.run_id }}'
-          $output = Join-Path 'release/staging/0.2.2' "windows-$env:PACKAGE_ARCH"
+          $output = Join-Path 'release/staging/0.2.3' "windows-$env:PACKAGE_ARCH"
           $unpackedDirName = if ($env:PACKAGE_ARCH -eq 'arm64') { 'win-arm64-unpacked' } else { 'win-unpacked' }
           $unpackedRoot = Join-Path $output $unpackedDirName
           $diagnosticRoot = Join-Path $taskDir 'installer-diagnostics-arm64'
           New-Item -ItemType Directory -Path $diagnosticRoot -Force | Out-Null
-          $installer = Join-Path $output "OpenType-0.2.2-Windows-$env:PACKAGE_ARCH.exe"
+          $installer = Join-Path $output "OpenType-0.2.3-Windows-$env:PACKAGE_ARCH.exe"
           if (Test-Path $installer) { Copy-Item $installer (Join-Path $diagnosticRoot ([IO.Path]::GetFileName($installer))) }
           if (Test-Path $unpackedRoot) {
             $unpackedRootItem = Get-Item -LiteralPath $unpackedRoot -Force
@@ -356,12 +356,12 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           SENSEVOICE_MODEL_DIR: tmp/release-${{ github.run_id }}/models/sensevoice-int8
         run: |
-          $output = Join-Path 'release/staging/0.2.2' "windows-$env:PACKAGE_ARCH"
+          $output = Join-Path 'release/staging/0.2.3' "windows-$env:PACKAGE_ARCH"
           $unpackedDirName = if ($env:PACKAGE_ARCH -eq 'arm64') { 'win-arm64-unpacked' } else { 'win-unpacked' }
           $unpackedRoot = Join-Path $output $unpackedDirName
           Write-Host "Verifying Electron Builder $env:PACKAGE_ARCH output directory: $unpackedRoot"
           if (-not (Test-Path (Join-Path $unpackedRoot 'OpenType.exe'))) { throw "Electron Builder $env:PACKAGE_ARCH app executable is missing: $unpackedRoot" }
-          $installer = Get-ChildItem $output -Filter "OpenType-0.2.2-Windows-$env:PACKAGE_ARCH.exe" -File | Select-Object -First 1
+          $installer = Get-ChildItem $output -Filter "OpenType-0.2.3-Windows-$env:PACKAGE_ARCH.exe" -File | Select-Object -First 1
           if (-not $installer) { throw 'Architecture-specific NSIS installer was not produced.' }
           if (-not (Test-Path (Join-Path $output 'latest.yml'))) { throw 'Stable latest.yml was not produced.' }
           $peMachine = { param($path) $bytes = [IO.File]::ReadAllBytes($path); $offset = [BitConverter]::ToInt32($bytes, 0x3c); if ($bytes[$offset] -ne 0x50 -or $bytes[$offset + 1] -ne 0x45 -or $bytes[$offset + 2] -ne 0 -or $bytes[$offset + 3] -ne 0) { throw "Invalid PE file: $path" }; [BitConverter]::ToUInt16($bytes, $offset + 4) }
@@ -418,18 +418,18 @@ jobs:
           $lines += "$feedDigest  latest.yml"
           $vcRuntime = if ($env:PACKAGE_ARCH -eq 'arm64') { Get-Content 'node_modules/sherpa-onnx-win-arm64/VC-RUNTIME-PROVENANCE.txt' -Raw } else { $null }
           $vcRuntimeHashes = if ($env:PACKAGE_ARCH -eq 'arm64') { Get-ChildItem 'node_modules/sherpa-onnx-win-arm64/vc-runtime' -Filter '*.dll' -File | ForEach-Object { [ordered]@{ file=$_.Name; sha256=(Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant() } } } else { @() }
-          $provenance = [ordered]@{ sourceCommit=$env:RELEASE_SHA; version='0.2.2'; arch=$env:PACKAGE_ARCH; installerSha256=$hash; modelManifestSha256=(Get-FileHash -Algorithm SHA256 'src/main/services/local-asr/model-store.ts').Hash.ToLowerInvariant(); signing='unsigned'; vcRuntimeProvenance=$vcRuntime; vcRuntimeFiles=$vcRuntimeHashes }
+          $provenance = [ordered]@{ sourceCommit=$env:RELEASE_SHA; version='0.2.3'; arch=$env:PACKAGE_ARCH; installerSha256=$hash; modelManifestSha256=(Get-FileHash -Algorithm SHA256 'src/main/services/local-asr/model-store.ts').Hash.ToLowerInvariant(); signing='unsigned'; vcRuntimeProvenance=$vcRuntime; vcRuntimeFiles=$vcRuntimeHashes }
           $provenance | ConvertTo-Json | Set-Content (Join-Path $output 'BUILD-PROVENANCE.json') -Encoding utf8
           Set-Content (Join-Path $output "SHA256SUMS-Windows-$env:PACKAGE_ARCH.txt") -Value $lines -Encoding utf8NoBOM
       - name: Retain Windows installer and verification records
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: OpenType-Windows-${{ matrix.arch }}-0.2.2-${{ github.sha }}
+          name: OpenType-Windows-${{ matrix.arch }}-0.2.3-${{ github.sha }}
           path: |
-            release/staging/0.2.2/windows-${{ matrix.arch }}/OpenType-0.2.2-Windows-${{ matrix.arch }}.exe
-            release/staging/0.2.2/windows-${{ matrix.arch }}/*.blockmap
-            release/staging/0.2.2/windows-${{ matrix.arch }}/latest.yml
-            release/staging/0.2.2/windows-${{ matrix.arch }}/SHA256SUMS-Windows-${{ matrix.arch }}.txt
-            release/staging/0.2.2/windows-${{ matrix.arch }}/BUILD-PROVENANCE.json
+            release/staging/0.2.3/windows-${{ matrix.arch }}/OpenType-0.2.3-Windows-${{ matrix.arch }}.exe
+            release/staging/0.2.3/windows-${{ matrix.arch }}/*.blockmap
+            release/staging/0.2.3/windows-${{ matrix.arch }}/latest.yml
+            release/staging/0.2.3/windows-${{ matrix.arch }}/SHA256SUMS-Windows-${{ matrix.arch }}.txt
+            release/staging/0.2.3/windows-${{ matrix.arch }}/BUILD-PROVENANCE.json
           if-no-files-found: error
           retention-days: 7

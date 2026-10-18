@@ -385,24 +385,21 @@ await test('preview captures dictation context and non-retained question targets
   await f.session.onStart();f.session.pushAudio(new Float32Array(8000),16000,0);await f.session.onStop();assert.deepEqual(f.cards,['final']);assert.equal(released.length,1)
   await f.session.onStart({preview:true});f.session.onCancel();assert.deepEqual(modes,['voice_command','voice_transcript']);assert.equal(released.length,2)
 })
-await test('only saved verified dictation transfers its target to optional input correction tracking', async () => {
-  for (const mode of ['voice_transcript', 'voice_translation', 'voice_command'] as const) for (const status of ['verified', 'unverified'] as const) {
-    let observed = 0, released = 0
+await test('completed dictation and translation release native targets after delivery', async () => {
+  for (const mode of ['voice_transcript', 'voice_translation'] as const) for (const status of ['verified', 'unverified'] as const) {
+    let released = 0
     const f = fixture({ getConfig: () => ({mode,outputLanguage:'en',asrLanguage:'zh',autoInject:true,blacklistDomains:[],appVersion:'test'}),
-      inject: async () => ({status,method:'clipboard'}), releaseTarget: () => { released++ },
-      observeInput: (id, text) => { observed++; assert.equal(JSON.parse(String(f.rows.get(id)?.modeMeta)).input_delivery,'verified'); assert.equal(text,'final'); return true } })
-    await f.session.onStart(); f.session.pushAudio(new Float32Array(8000),16000,0); await f.session.onStop(); f.session.dispose()
-    const expected = mode === 'voice_transcript' && status === 'verified'
-    assert.equal(observed, expected ? 1 : 0); assert.equal(released, expected ? 0 : 1)
+      inject: async () => ({status,method:'clipboard'}), releaseTarget: () => { released++ } })
+    const started = await f.session.onStart(); f.session.pushAudio(new Float32Array(8000),16000,0); await f.session.onStop(); f.session.dispose()
+    assert.equal(JSON.parse(String(f.rows.get(started!.audioId)?.modeMeta)).input_delivery, status)
+    assert.equal(released, 1)
   }
 })
-await test('disabled or failed-to-save observations retain normal target cleanup', async () => {
-  for (const failSave of [false,true]) {
-    let observed=0,released=0
-    const f=fixture({inject:async()=>({status:'verified',method:'clipboard'}),observeInput:()=>{observed++;return false},releaseTarget:()=>{released++}})
-    const save=f.deps.saveHistory;f.deps.saveHistory=async row=>{if(failSave&&String(row.modeMeta).includes('input_delivery'))throw new Error('disk full');await save(row)}
-    await f.session.onStart();f.session.pushAudio(new Float32Array(8000),16000,0);await f.session.onStop()
-    assert.equal(observed,failSave?0:1);assert.equal(released,1)
-  }
+await test('delivery history save failures still release the native target', async () => {
+  let released = 0
+  const f=fixture({inject:async()=>({status:'verified',method:'clipboard'}),releaseTarget:()=>{released++}})
+  const save=f.deps.saveHistory;f.deps.saveHistory=async row=>{if(String(row.modeMeta).includes('input_delivery'))throw new Error('disk full');await save(row)}
+  await f.session.onStart();f.session.pushAudio(new Float32Array(8000),16000,0);await f.session.onStop();f.session.dispose()
+  assert.equal(released,1)
 })
 console.log(`${passed} capture session scenarios passed`)

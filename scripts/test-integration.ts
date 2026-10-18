@@ -70,8 +70,9 @@ console.log('\n=== 1. 服务器连通性 ===')
   const res = await fetch(`${CLOUD}/health`)
   const j = await res.json()
   check('服务器可达', res.status, 200)
+  check('状态正常', j.status, 'ok')
   check('服务标识', j.service, 'opentype')
-  check('隔离账号测试的 LLM 配置状态', j.upstreams.llm, process.env.EXPECT_LLM_CONFIGURED === '1')
+  check('账号 API 已接通', j.account_api, 1)
 }
 
 // MARK: 账号
@@ -158,6 +159,11 @@ console.log('\n=== 3. token 刷新（AuthService 自动路径）===')
 
 console.log('\n=== 4. 推送（SyncEngine 真实路径）===')
 {
+  const initial = await sync.getStatus()
+  check('新账号同步默认关闭', initial?.sync_enabled, false)
+  const enabled = await sync.updateSettings({ sync_enabled: true })
+  check('测试账号显式启用同步', enabled?.sync_enabled, true)
+
   // 用真实 drizzle 形状的数据（camelCase），而不是手工 snake_case ——
   // 后者会掩盖「客户端发 camelCase、服务端读 snake_case」这类真实缺陷。
   // 这里模拟 db/index.ts 的 pendingSyncForApi 输出。

@@ -18,6 +18,40 @@ export interface InputSnapshot {
   webUrls?: string[]
   contextRedacted?: boolean
   selectionReadOnly?: boolean
+  canVerify?: boolean
+}
+
+/** Chromium can expose its focused field shortly after AX is enabled. Wait
+ * before recording the insertion baseline, retaining only one native token. */
+export async function captureReadableInput(
+  capture: (expectedPid?: number) => InputSnapshot,
+  release: (token: string) => void,
+  signal: AbortSignal,
+  pause: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
+): Promise<InputSnapshot> {
+  signal.throwIfAborted()
+  let snapshot = capture()
+  const pid = snapshot.pid
+  try {
+    for (let attempt = 0; attempt < 12 && snapshot.canVerify === false
+      && !snapshot.selectionReadOnly && (snapshot.token || snapshot.reason === 'injection_target_not_editable'); attempt++) {
+      await pause(50)
+      signal.throwIfAborted()
+      const next = capture(pid)
+      if (snapshot.token) release(snapshot.token)
+      snapshot = next
+      if (next.pid !== pid) {
+        if (next.token) release(next.token)
+        return { appName: '', bundleId: '', pid, traceId: next.traceId,
+          contextRedacted: true, reason: 'injection_app_changed' }
+      }
+    }
+    signal.throwIfAborted()
+    return snapshot
+  } catch (error) {
+    if (snapshot.token) release(snapshot.token)
+    throw error
+  }
 }
 export interface DeliveryOutcome {
   status: 'verified' | 'unverified'

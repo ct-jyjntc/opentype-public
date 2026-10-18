@@ -89,5 +89,13 @@ console.log('\n=== 服务端域名黑名单 ===')
   check('首次失败不抛异常', bl.matches('anything.com'), false)
 }
 
+{
+  const bl = new RemoteBlacklist(async () => [
+    'Bank.Example.com', '.bank.example.com', 'bank.example.com.', 'not a domain', 'https://example.org', '',
+  ])
+  await bl.refresh()
+  check('远端列表规范化、去重并过滤非法值', bl.entries(), ['bank.example.com'])
+}
+
 console.log(`\n${passed} 通过, ${failed} 失败`)
 process.exit(failed > 0 ? 1 : 0)

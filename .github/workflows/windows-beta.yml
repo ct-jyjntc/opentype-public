@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing prerelease tag, for example v0.2.2-beta.4
+        description: Existing prerelease tag, for example v0.2.3-beta.1
         required: true
         type: string
       source_sha:

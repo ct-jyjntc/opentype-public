@@ -30,7 +30,6 @@ export interface Preferences {
   personalStyle: string
   usePersonalStyle: boolean
   learnFromEdits: boolean
-  learnFromInputEdits: boolean
   outputPreferences: OutputPreferences
   appExpressions: AppExpression[]
   skills: SkillSettings

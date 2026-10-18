@@ -200,6 +200,25 @@ private func focusAttribute(on element: AXUIElement) -> (element: AXUIElement?, 
     let error = AXUIElementCopyAttributeValue(element, kAXFocusedUIElementAttribute as CFString, &value)
     return (error == .success ? targetElement(value) : nil, error)
 }
+private func windowFocusedElement(app: NSRunningApplication) -> AXUIElement? {
+    let application = AXUIElementCreateApplication(app.processIdentifier)
+    guard let window = targetElement(targetAttr(application, kAXFocusedWindowAttribute as String)) else { return nil }
+    var queue: [(AXUIElement, Int)] = [(window, 0)], visited = 0
+    while visited < queue.count && visited < 128 {
+        let (node, depth) = queue[visited]; visited += 1
+        let direct = focusAttribute(on: node)
+        if let focused = direct.element { return focused }
+        let role = targetAttr(node, kAXRoleAttribute as String) as? String ?? ""
+        if ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"].contains(role),
+           targetAttr(node, kAXFocusedAttribute as String) as? Bool == true { return node }
+        // Inspect focus and structure only. Never infer focus from arbitrary
+        // editable children or read neighbouring field values.
+        if depth < 16, let children = targetAttr(node, kAXChildrenAttribute as String) as? [AXUIElement] {
+            queue.append(contentsOf: children.prefix(max(0, 128 - queue.count)).map { ($0, depth + 1) })
+        }
+    }
+    return nil
+}
 /// Query the known foreground process first. System-wide focus can transiently
 /// return noValue even while the app exposes its current focused element.
 /// Accept app focus only when AX confirms it belongs to that exact process;
@@ -226,6 +245,15 @@ private func focusedElement(app: NSRunningApplication?, diagnostics: Bool = true
     if let element = global.element {
         return FocusResult(element: element, error: .success, source: "system", globalError: global.error,
                            appError: appError, initialFocusError: Int(appError?.rawValue ?? global.error.rawValue))
+    }
+    if let app, global.error == .noValue,
+       NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+       let element = windowFocusedElement(app: app) {
+        var pid: pid_t = 0
+        if AXUIElementGetPid(element, &pid) == .success, pid == app.processIdentifier {
+            return FocusResult(element: element, error: .success, source: "window", globalError: global.error,
+                               appError: appError, initialFocusError: Int(appError?.rawValue ?? global.error.rawValue))
+        }
     }
     return FocusResult(element: nil, error: global.error, source: "none", globalError: global.error,
                        appError: appError, initialFocusError: Int(appError?.rawValue ?? global.error.rawValue))
@@ -267,13 +295,7 @@ private final class InputTarget {
     let value: String?
     let range: CFRange?
     var expected: String?
-    var insertedText: String?
-    var observationBaseValue: String?
-    var observationBaseRange: CFRange?
-    var observationAfterPadding = 0
     var submitted = false
-    var verified = false
-    var observingSince: TimeInterval?
     let webUrls: [String]
     let webRedacted: Bool
     init(app: NSRunningApplication) {
@@ -373,11 +395,15 @@ public func inputTargetDiagnostics(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeM
     return targetJSON(targetDiagnostics())
 }
 
-private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePointer<CChar>? {
+private func captureTarget(_ allowReadOnlySelection: Bool, expectedPID: pid_t? = nil) -> UnsafeMutablePointer<CChar>? {
     let app = NSWorkspace.shared.frontmostApplication
     var result: [String: Any] = ["appName": app?.localizedName ?? "", "bundleId": app?.bundleIdentifier ?? "", "pid": Int(app?.processIdentifier ?? 0)]
     guard AXIsProcessTrusted() else { result["diagnostics"] = targetDiagnostics(app: app); result["reason"] = "injection_permission"; return targetJSON(result) }
     guard let app else { result["diagnostics"] = targetDiagnostics(app: app); result["reason"] = "injection_front_app_missing"; return targetJSON(result) }
+    if let expectedPID, app.processIdentifier != expectedPID {
+        result["reason"] = "injection_app_changed"; result["contextRedacted"] = true
+        return targetJSON(result)
+    }
     // Best effort: the focused field only adds context, selection and later
     // verification. Failing to read it never blocks delivery.
     let focus = readFocusForContext(app: app)
@@ -390,6 +416,7 @@ private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePoint
     addFocusDiagnostics(focus, to: &diagnostics)
     result["diagnostics"] = diagnostics
     result["contextRedacted"] = true
+    result["canVerify"] = false
     if let field, secureTarget(field) { result["reason"] = "injection_secure_target"; return targetJSON(result) }
     let editable = field.flatMap { editableTarget($0) }
     if let element = editable ?? field {
@@ -418,6 +445,9 @@ private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePoint
     }
     guard inputTargets.count < 16 else { result["reason"] = "injection_target_capacity"; return targetJSON(result) }
     let target = editable.map { InputTarget(app: app, element: $0) } ?? InputTarget(app: app)
+    if let value = target.value, let range = target.range {
+        result["canVerify"] = expectedInsertion(value, range, "") != nil
+    }
     let token = UUID().uuidString
     inputTargets[token] = target; result["token"] = token
     if !redacted, let value = target.value, let range = target.range, expectedInsertion(value, range, "") != nil {
@@ -437,6 +467,10 @@ private func captureTarget(_ allowReadOnlySelection: Bool) -> UnsafeMutablePoint
 public func captureInputTarget() -> UnsafeMutablePointer<CChar>? { captureTarget(false) }
 @_cdecl("captureCommandTarget")
 public func captureCommandTarget() -> UnsafeMutablePointer<CChar>? { captureTarget(true) }
+@_cdecl("captureInputTargetForProcess")
+public func captureInputTargetForProcess(_ expectedPID: Int32, _ allowReadOnlySelection: Int32) -> UnsafeMutablePointer<CChar>? {
+    captureTarget(allowReadOnlySelection != 0, expectedPID: expectedPID)
+}
 
 private func prepareInputTargetOnMain(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     guard let tokenPtr, let target = inputTargets[String(cString: tokenPtr)], !target.submitted else { return targetJSON(["reason": "injection_target_unavailable"]) }
@@ -461,7 +495,6 @@ private func commitInputTargetOnMain(_ tokenPtr: UnsafePointer<CChar>?, _ textPt
     guard !text.isEmpty else { return targetJSON(["reason": "injection_failed"]) }
     if let value = target.value, let range = target.range, let expected = expectedInsertion(value, range, text) {
         target.expected = expected
-        target.insertedText = text
     }
     target.submitted = true
     return nil
@@ -514,10 +547,6 @@ private func prepareBodyOnlyContextFallback(_ target: InputTarget, text: String,
           let element = target.element, let value = target.value, let range = target.range,
           let expected = expectedInsertion(value, range, text) else { return .refused("stale") }
     target.expected = expected
-    target.insertedText = text
-    target.observationBaseValue = value
-    target.observationBaseRange = range
-    target.observationAfterPadding = 0
     target.submitted = true
     return .ready(ContextInjection(
         strictTarget: TextInjector.StrictInputTarget(element: element, processID: target.app.processIdentifier,
@@ -565,13 +594,7 @@ private func prepareContextEdit(_ token: String, _ text: String, _ editJSON: Str
           currentContextMatches(target, value: value, range: expandedRange) else { return .refused("stale", selected: expandedRange) }
     let payload = (edit.before?.replacement ?? "") + text + (edit.after?.replacement ?? "")
     guard let expected = expectedInsertion(value, expandedRange, payload) else { return .refused("invalid", selected: expandedRange) }
-    let beforeReplacementLength = ((edit.before?.replacement ?? "") as NSString).length
-    guard let observationBase = expectedInsertion(value, expandedRange, (edit.before?.replacement ?? "") + (edit.after?.replacement ?? "")) else { return .refused("invalid", selected: expandedRange) }
     target.expected = expected
-    target.insertedText = text
-    target.observationBaseValue = observationBase
-    target.observationBaseRange = CFRange(location: expandedRange.location + beforeReplacementLength, length: 0)
-    target.observationAfterPadding = ((edit.after?.replacement ?? "") as NSString).length
     target.submitted = true
     return .ready(ContextInjection(
         strictTarget: TextInjector.StrictInputTarget(element: element, processID: target.app.processIdentifier,
@@ -680,10 +703,6 @@ private func commitInputTargetWithContextEditThroughInjector(
                 if let target = inputTargets[token] {
                     target.submitted = false
                     target.expected = nil
-                    target.insertedText = nil
-                    target.observationBaseValue = nil
-                    target.observationBaseRange = nil
-                    target.observationAfterPadding = 0
                 }
                 return restored
             }
@@ -694,72 +713,22 @@ private func commitInputTargetWithContextEditThroughInjector(
     }
 }
 
+func inputReadPending(_ error: AXError) -> Bool { error == .cannotComplete || error == .noValue }
+func inputVerificationStatus(_ error: AXError, _ value: String?, _ expected: String) -> String {
+    if inputReadPending(error) { return "pending" }
+    guard error == .success, let value else { return "unverified" }
+    return value == expected ? "verified" : "pending"
+}
+
 @_cdecl("verifyInputTarget")
 public func verifyInputTarget(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     guard let tokenPtr, let target = inputTargets[String(cString: tokenPtr)], target.submitted else { return targetJSON(["reason": "injection_target_unavailable"]) }
     guard let expected = target.expected, let element = target.element else { return targetJSON(["status": "unverified"]) }
     guard !target.app.isTerminated, !secureTarget(element) else { return targetJSON(["status": "unverified"]) }
     let (readError, rawValue) = targetAttrResult(element, kAXValueAttribute as String)
-    guard readError == .success else {
-        // Accessibility can report a transient read failure during delivery.
-        // Return pending so the existing bounded verifier rereads this same
-        // target; every other AX error remains unverified.
-        if readError == .cannotComplete { return targetJSON(["status": "pending", "reason": "ax_cannot_complete", "ax_error": readError.rawValue]) }
-        return targetJSON(["status": "unverified", "reason": "ax_read_failed", "ax_error": readError.rawValue])
-    }
-    guard let value = rawValue as? String else { return targetJSON(["status": "unverified", "reason": "ax_value_missing"]) }
-    if value == expected { target.verified = true }
-    return targetJSON(["status": value == expected ? "verified" : "pending"])
-}
-
-/// Only the inserted region may change. Compare exact prefix/suffix locally;
-/// never send the surrounding field or its changes over the native bridge.
-/// Size limits bound this optional learning feature, not dictation duration.
-func observedInsertion(_ original: String, _ range: CFRange, _ current: String) -> String? {
-    guard (original as NSString).length <= 1_000_000, (current as NSString).length <= 1_000_000,
-          expectedInsertion(original, range, "") != nil else { return nil }
-    let old = original as NSString, next = current as NSString
-    let suffixLength = old.length - range.location - range.length
-    let length = next.length - range.location - suffixLength
-    guard length >= 0, length <= 100_000,
-          next.substring(to: range.location) == old.substring(to: range.location),
-          next.substring(from: range.location + length) == old.substring(from: range.location + range.length),
-          expectedInsertion(current, CFRange(location: range.location, length: length), "") != nil else { return nil }
-    return next.substring(with: NSRange(location: range.location, length: length))
-}
-
-@_cdecl("beginInputObservation")
-public func beginInputObservation(_ tokenPtr: UnsafePointer<CChar>?, _ textPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
-    guard let tokenPtr, let textPtr, let target = inputTargets[String(cString: tokenPtr)], target.verified, target.element != nil,
-          target.insertedText == String(cString: textPtr), !target.webRedacted,
-          let original = target.observationBaseValue ?? target.value,
-          let range = target.observationBaseRange ?? target.range,
-          let expected = target.expected,
-          observedInsertion(original, range, expected) == target.insertedText else { return targetJSON(["ok": false]) }
-    target.observingSince = ProcessInfo.processInfo.systemUptime
-    return targetJSON(["ok": true])
-}
-
-@_cdecl("readInputObservation")
-public func readInputObservation(_ tokenPtr: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
-    guard let tokenPtr, let target = inputTargets[String(cString: tokenPtr)], let since = target.observingSince,
-          ProcessInfo.processInfo.systemUptime - since < 60 else { return targetJSON(["active": false, "reason": "expired"]) }
-    guard AXIsProcessTrusted(), !target.app.isTerminated else { return targetJSON(["active": false, "reason": "unavailable"]) }
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.app.processIdentifier else { return targetJSON(["active": false, "reason": "app_inactive"]) }
-    guard let element = target.element, !secureTarget(element) else { return targetJSON(["active": false, "reason": "field_invalid"]) }
-    let web = targetWebContext(element)
-    guard !web.redacted, web.urls == target.webUrls else { return targetJSON(["active": false, "reason": "document_changed"]) }
-    guard let focused = focusedTarget(app: target.app), CFEqual(focused, element) else { return targetJSON(["active": false, "reason": "field_unfocused"]) }
-    // The current field is read transiently to reject any change outside the
-    // insertion. Nothing from a different target or outside that range returns.
-    guard let original = target.observationBaseValue ?? target.value,
-          let range = target.observationBaseRange ?? target.range,
-          let current = targetAttr(element, kAXValueAttribute as String) as? String,
-          let text = observedInsertion(original, range, current), let selected = targetRange(element),
-          selected.location >= range.location, selected.length >= 0,
-          selected.location <= range.location + (text as NSString).length + target.observationAfterPadding,
-          selected.length <= max(0, range.location + (text as NSString).length - selected.location) else { return targetJSON(["active": false, "reason": "range_changed"]) }
-    return targetJSON(["active": true, "text": text])
+    let status = inputVerificationStatus(readError, rawValue as? String, expected)
+    guard readError == .success else { return targetJSON(["status": status, "ax_error": readError.rawValue]) }
+    return targetJSON(["status": status])
 }
 
 @_cdecl("releaseInputTarget")

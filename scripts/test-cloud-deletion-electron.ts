@@ -20,7 +20,12 @@ async function api(path: string, body: unknown = {}, token?: string) {
 async function account(name: string) {
   const data = await api('/oauth/register', { email: `${name}@isolated.invalid`, password: 'synthetic-test-password' })
   assert.equal(data.status, 'OK')
-  return { userId: data.data.user_id as string, token: data.data.access_token as string, serverUrl: baseUrl }
+  const token = data.data.access_token as string
+  const initial = await api('/transcription_history/sync_status', {}, token)
+  assert.equal(initial.data.sync_enabled, false)
+  const enabled = await api('/transcription_history/sync_settings', { sync_enabled: true }, token)
+  assert.equal(enabled.data.sync_enabled, true)
+  return { userId: data.data.user_id as string, token, serverUrl: baseUrl }
 }
 const a = await account('delete-a'), b = await account('delete-b')
 let active = a

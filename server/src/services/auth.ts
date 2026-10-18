@@ -15,6 +15,7 @@ const ACCESS_TOKEN_TTL_MS = 3600 * 1000          // 1 小时
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 3600 * 1000  // 30 天
 const AUTH_CODE_TTL_MS = 5 * 60 * 1000           // 5 分钟
 const EMAIL_CODE_TTL_MS = 10 * 60 * 1000         // 10 分钟
+export const AUTH_RECORD_CLEANUP_GRACE_MS = 24 * 3600 * 1000
 const PBKDF2_ROUNDS = 100_000                    // 远高于常见的 10000 轮
 const PBKDF2_KEYLEN = 32
 
@@ -280,6 +281,36 @@ export function revokeRefreshToken(refreshToken: string): boolean {
 export function revokeAllUserTokens(userId: string): void {
   getDb().prepare('UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL')
     .run(Date.now(), userId)
+}
+
+export interface AuthRecordCleanupResult {
+  refresh_tokens: number
+  auth_codes: number
+  email_codes: number
+  password_reset_codes: number
+}
+
+/**
+ * 删除已过期且超过安全宽限期的认证记录。
+ *
+ * 宽限期保留已过期记录的短暂取证窗口，并让 refresh token 重放检测在
+ * 令牌刚过期时仍能吊销同一用户的其它会话。未过期及正好处于宽限边界的
+ * 记录不会被删除；重复执行不会产生额外变化。
+ */
+export function cleanupExpiredAuthRecords(now = Date.now()): AuthRecordCleanupResult {
+  const db = getDb()
+  const cutoff = now - AUTH_RECORD_CLEANUP_GRACE_MS
+  return transaction(() => {
+    const count = (table: 'refresh_tokens' | 'auth_codes' | 'email_codes' | 'password_reset_codes') => (
+      Number(db.prepare(`DELETE FROM ${table} WHERE expires_at < ?`).run(cutoff).changes)
+    )
+    return {
+      refresh_tokens: count('refresh_tokens'),
+      auth_codes: count('auth_codes'),
+      email_codes: count('email_codes'),
+      password_reset_codes: count('password_reset_codes')
+    }
+  })
 }
 
 // MARK: - PKCE 授权码

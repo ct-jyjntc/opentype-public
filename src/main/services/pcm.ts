@@ -25,8 +25,8 @@ export function concatToInt16(chunks: Float32Array[]): Int16Array {
 
 /** 生成 44 字节标准 WAV 头 + PCM 数据。 */
 export function encodeWav(chunks: Float32Array[], sampleRate: number): Uint8Array {
-  const pcm = concatToInt16(chunks)
-  const dataBytes = pcm.length * 2
+  const sampleCount = chunks.reduce((n, c) => n + c.length, 0)
+  const dataBytes = sampleCount * 2
   const buffer = new ArrayBuffer(44 + dataBytes)
   const view = new DataView(buffer)
 
@@ -48,7 +48,16 @@ export function encodeWav(chunks: Float32Array[], sampleRate: number): Uint8Arra
   writeStr(36, 'data')
   view.setUint32(40, dataBytes, true)
 
-  new Uint8Array(buffer, 44).set(new Uint8Array(pcm.buffer, pcm.byteOffset, dataBytes))
+  // Encode directly into the final WAV buffer instead of allocating a second
+  // Int16Array and another full-size copy for long recordings.
+  let offset = 44
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      const sample = Math.max(-1, Math.min(1, chunk[i]))
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+      offset += 2
+    }
+  }
   return new Uint8Array(buffer)
 }
 

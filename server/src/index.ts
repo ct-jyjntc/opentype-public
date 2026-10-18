@@ -20,7 +20,7 @@ import {
   initSigningKey, registerUser, authenticate, getUserById, getUserByEmail, issueTokens, refreshTokens,
   revokeRefreshToken, createEmailCode, verifyEmailCode,
   createPasswordResetCode, resetPasswordWithCode, deleteUserAccount,
-  verifyAccessToken
+  verifyAccessToken, cleanupExpiredAuthRecords
 } from './services/auth.ts'
 import {
   pushHistory, pullHistory, loadOlder, getSyncStatus, updateSyncSettings,
@@ -727,8 +727,16 @@ server.keepAliveTimeout = 5000
 const cleanupCloudHistory = () => {
   try { expireCloudHistory() } catch { console.warn('[opentype] cloud retention cleanup will retry') }
 }
+const cleanupAuthRecords = () => {
+  try {
+    const removed = Object.values(cleanupExpiredAuthRecords()).reduce((total, count) => total + count, 0)
+    if (removed > 0) console.log(`[opentype] auth cleanup removed ${removed} expired records`)
+  } catch { console.warn('[opentype] auth record cleanup will retry') }
+}
 cleanupCloudHistory()
+cleanupAuthRecords()
 const cloudRetentionTimer = setInterval(cleanupCloudHistory, 60_000); cloudRetentionTimer.unref()
+const authRecordCleanupTimer = setInterval(cleanupAuthRecords, 6 * 3600 * 1000); authRecordCleanupTimer.unref()
 server.listen(PORT, HOST, () => {
   console.log(`[opentype] listening on http://${HOST}:${PORT}`)
   console.log(`[opentype] db: ${DB_PATH}`)
@@ -738,6 +746,7 @@ server.listen(PORT, HOST, () => {
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     clearInterval(cloudRetentionTimer)
+    clearInterval(authRecordCleanupTimer)
     console.log(`[opentype] ${sig} received, shutting down`)
     server.close(() => { closeDb(); process.exit(0) })
     setTimeout(() => { server.closeAllConnections(); closeDb(); process.exit(0) }, 10_000).unref()
