@@ -63,12 +63,16 @@ function FloatingBar() {
   if (state.phase === 'idle') return null
   // Mode is shown by colour only: dictation white, translation blue, ask-anything green.
   const mode = state.mode === 'voice_translation' ? 'translate' : state.mode === 'voice_command' ? 'ask' : 'dictate'
-  const noticeText = [...new Set([state.detail, state.audioNotice].filter(Boolean).map(errorMessage))].join('；')
+  const suppressDoneInjectionNotice = state.phase === 'done'
+    && (state.detail === 'injection_unverified'
+      || state.detail === 'injection_cancelled_after_send'
+      || state.detail === 'injection_already_sent')
+  const noticeText = [...new Set([suppressDoneInjectionNotice ? undefined : state.detail, state.audioNotice]
+    .filter(Boolean).map(errorMessage))].join('；')
   const errorText = state.phase === 'error' ? noticeText || labels.error : ''
   // The capsule has room for one short clause; the full reason stays in the tooltip.
   const label = state.phase === 'error' ? errorText.split(/[，。,]/)[0]
     : state.phase === 'done' && state.detail === 'microphone_disconnected_saved' ? '录音提前结束'
-    : state.phase === 'done' && state.detail?.startsWith('injection_') ? '请核对输入结果'
     : state.phase === 'done' && noticeText ? noticeText.split(/[，。,；]/)[0]
     : state.phase === 'refining' && mode === 'translate' ? '正在翻译'
     : state.phase === 'refining' && mode === 'ask' ? '正在思考'
