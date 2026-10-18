@@ -6,7 +6,7 @@ import { app, BrowserWindow, dialog, ipcMain, screen, Tray, Menu, nativeImage, s
 import { join, basename, relative, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
-import { readFile, writeFile, stat } from 'node:fs/promises'
+import { readFile, rename, writeFile, stat } from 'node:fs/promises'
 import { serviceRequest as request } from './services/network'
 
 import { InputHelper, InputDelivery, ContextHelper, UtilHelper, KeyboardHelper, type KeyEvent } from './native/ffi'
@@ -727,21 +727,32 @@ function createAuthService(): AuthService {
 }
 
 function createRemoteBlacklist(): RemoteBlacklist {
-  return new RemoteBlacklist(async () => {
-    const response = await request(serviceEndpoint(OFFICIAL_BACKEND_URL, '/app/get_blacklist_domain'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'user-agent': `OpenType/${app.getVersion()}` },
-      body: '{}',
-      signal: AbortSignal.timeout(15_000),
-    })
-    if (response.statusCode !== 200) {
-      await response.body.dump()
-      throw new Error(`blacklist_http_${response.statusCode}`)
-    }
-    const payload = await response.body.json() as { data?: { data?: unknown } }
-    if (!Array.isArray(payload.data?.data)) throw new Error('blacklist_invalid_response')
-    return payload.data.data.filter((value): value is string => typeof value === 'string')
-  })
+  const cachePath = join(app.getPath('userData'), 'remote-blacklist.json')
+  return new RemoteBlacklist(
+    async () => {
+      const response = await request(serviceEndpoint(OFFICIAL_BACKEND_URL, '/app/get_blacklist_domain'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'user-agent': `OpenType/${app.getVersion()}` },
+        body: '{}',
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (response.statusCode !== 200) {
+        await response.body.dump()
+        throw new Error(`blacklist_http_${response.statusCode}`)
+      }
+      const payload = await response.body.json() as { data?: { data?: unknown } }
+      if (!Array.isArray(payload.data?.data)) throw new Error('blacklist_invalid_response')
+      return payload.data.data.filter((value): value is string => typeof value === 'string')
+    },
+    {
+      load: async () => JSON.parse(await readFile(cachePath, 'utf8')),
+      save: async value => {
+        const temporary = `${cachePath}.${process.pid}.${Date.now()}.tmp`
+        await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 })
+        await rename(temporary, cachePath)
+      },
+    },
+  )
 }
 
 /**
@@ -2234,6 +2245,7 @@ if (gotLock) app.whenReady().then(async () => {
   // store 必须在读取任何配置前就绪：热键绑定、编码器路径都依赖它
   await initStore()
   remoteBlacklist = createRemoteBlacklist()
+  await remoteBlacklist.initialize()
   auth = createAuthService()
   sync = createSyncEngine()
   pipeline = createVoicePipeline()

@@ -22,7 +22,7 @@ module.exports = async function pruneKoffiPayload(context) {
   try {
     entries = readdirSync(koffiRoot, { withFileTypes: true })
   } catch (error) {
-    if (error.code === 'ENOENT') return
+    if (error.code === 'ENOENT') throw new Error(`Koffi payload directory is missing: ${koffiRoot}`)
     throw error
   }
 

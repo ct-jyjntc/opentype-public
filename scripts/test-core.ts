@@ -3,7 +3,7 @@
 // 它们错了整个产品就是废的——状态机错会导致录音停不下来，编码错会让服务端收到垃圾音频。
 
 import { parseShortcutString, HotkeyStateMachine, type HotkeyEvent, type HotkeyBinding } from '../src/main/services/hotkey.ts'
-import { encodeWav, float32ToInt16 } from '../src/main/services/pcm.ts'
+import { encodeWav, encodeWavInt16, float32ToInt16 } from '../src/main/services/pcm.ts'
 
 let passed = 0
 let failed = 0
@@ -229,6 +229,24 @@ console.log('\n=== WAV 编码 ===')
   check('削波: 负溢出夹紧', clipped[1], -32768)
   check('削波: 零值', clipped[2], 0)
   check('削波: 边界值不溢出', [clipped[3], clipped[4]], [32767, -32768])
+}
+
+{
+  // Int16 直写路径必须与 Float32 编码逐字节一致，长录音的内存优化不能改变音频。
+  const chunks = [new Float32Array([0.1, -0.2]), new Float32Array([0.3, 2.5, -2.5])]
+  const floatWav = encodeWav(chunks, 16000)
+  const int16Wav = encodeWavInt16(chunks.map(float32ToInt16), 16000)
+  check('WAV: Int16 直写与 Float32 编码逐字节一致',
+    Buffer.from(int16Wav).equals(Buffer.from(floatWav)), true)
+}
+
+{
+  // 检查最终的 WAV 数据区而不只是中间转换函数，防止直写循环漏掉削波。
+  const wav = encodeWav([new Float32Array([2.5, -2.5, 0, 1, -1])], 16000)
+  const view = new DataView(wav.buffer, wav.byteOffset, wav.byteLength)
+  check('WAV: 直写削波样本',
+    [0, 1, 2, 3, 4].map(i => view.getInt16(44 + i * 2, true)),
+    [32767, -32768, 0, 32767, -32768])
 }
 
 function sleep(ms: number): Promise<void> {

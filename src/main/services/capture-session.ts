@@ -1,7 +1,7 @@
 import { appliedSkill } from '../../shared/skills'
 import { jsonObject, voiceContext } from './voice-context'
 import { randomUUID } from 'node:crypto'
-import { encodeWav } from './pcm'
+import { encodeWavInt16, float32ToInt16 } from './pcm'
 import { RendererVoiceService } from './renderer-voice'
 import { applyOutputPreferences } from './output-format'
 import type { DeliveryOutcome } from './input-delivery'
@@ -37,7 +37,7 @@ interface Session {
   id: string
   started: number
   controller: AbortController
-  chunks: Float32Array[]
+  chunks: Int16Array[]
   sampleRate: number
   samples: number
   stopping: boolean
@@ -171,7 +171,7 @@ export class CaptureSession {
         },
       })
       for (const audio of pending.pendingAudio) {
-        this.session.chunks.push(audio.pcm)
+        this.session.chunks.push(float32ToInt16(audio.pcm))
         this.session.samples += audio.pcm.length
         this.session.sampleRate = audio.sampleRate
         this.session.live?.pushAudio(audio.pcm)
@@ -207,7 +207,7 @@ export class CaptureSession {
       !pcm.length
     )
       return
-    s.chunks.push(pcm)
+    s.chunks.push(float32ToInt16(pcm))
     s.samples += pcm.length
     s.sampleRate = sampleRate
     s.live?.pushAudio(pcm)
@@ -265,7 +265,7 @@ export class CaptureSession {
         return null
       }
       notify('encoding')
-      const data = encodeWav(s.chunks, s.sampleRate)
+      const data = encodeWavInt16(s.chunks, s.sampleRate)
       s.chunks = []
       const audioPath = await this.deps.saveAudio(s.id, data)
       const meta: Record<string, unknown> = {

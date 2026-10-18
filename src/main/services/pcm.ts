@@ -23,9 +23,7 @@ export function concatToInt16(chunks: Float32Array[]): Int16Array {
   return out
 }
 
-/** 生成 44 字节标准 WAV 头 + PCM 数据。 */
-export function encodeWav(chunks: Float32Array[], sampleRate: number): Uint8Array {
-  const sampleCount = chunks.reduce((n, c) => n + c.length, 0)
+function createWav(sampleCount: number, sampleRate: number): { buffer: ArrayBuffer; view: DataView } {
   const dataBytes = sampleCount * 2
   const buffer = new ArrayBuffer(44 + dataBytes)
   const view = new DataView(buffer)
@@ -47,6 +45,13 @@ export function encodeWav(chunks: Float32Array[], sampleRate: number): Uint8Arra
   view.setUint16(34, 16, true)              // 位深
   writeStr(36, 'data')
   view.setUint32(40, dataBytes, true)
+  return { buffer, view }
+}
+
+/** 生成 44 字节标准 WAV 头 + Float32 PCM 数据。 */
+export function encodeWav(chunks: Float32Array[], sampleRate: number): Uint8Array {
+  const sampleCount = chunks.reduce((n, c) => n + c.length, 0)
+  const { buffer, view } = createWav(sampleCount, sampleRate)
 
   // Encode directly into the final WAV buffer instead of allocating a second
   // Int16Array and another full-size copy for long recordings.
@@ -55,6 +60,20 @@ export function encodeWav(chunks: Float32Array[], sampleRate: number): Uint8Arra
     for (let i = 0; i < chunk.length; i++) {
       const sample = Math.max(-1, Math.min(1, chunk[i]))
       view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+      offset += 2
+    }
+  }
+  return new Uint8Array(buffer)
+}
+
+/** 直接封装已量化的 Int16 PCM，避免长录音在停止时再次分配同尺寸样本数组。 */
+export function encodeWavInt16(chunks: Int16Array[], sampleRate: number): Uint8Array {
+  const sampleCount = chunks.reduce((n, c) => n + c.length, 0)
+  const { buffer, view } = createWav(sampleCount, sampleRate)
+  let offset = 44
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      view.setInt16(offset, chunk[i], true)
       offset += 2
     }
   }

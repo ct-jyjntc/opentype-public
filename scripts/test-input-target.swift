@@ -1,5 +1,6 @@
 import Foundation
 import ApplicationServices
+import AppKit
 @main struct InputTargetTests {
     static func main() {
         precondition(expectedInsertion("Hi🙂你好", CFRange(location: 2, length: 2), "OpenType") == "HiOpenType你好")
@@ -24,6 +25,17 @@ import ApplicationServices
         precondition(inputReadPending(.noValue))
         precondition(!inputReadPending(.invalidUIElement))
         precondition(TextInjector.keyCode(forCharacter: "v") != nil)
-        print("PASS native UTF-16 insertion, selected replacement, empty/multiline/emoji, invalid range protection, AX URL representations and transient paste verification")
+        if AXIsProcessTrusted(), NSWorkspace.shared.frontmostApplication != nil {
+            let pointer = captureInputTargetForProcess(-1, 0)
+            precondition(pointer != nil)
+            let json = String(cString: pointer!)
+            freeString(pointer)
+            let object = try! JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+            precondition(object["reason"] as? String == "injection_app_changed")
+            print("PASS native UTF-16 insertion, selected replacement, empty/multiline/emoji, invalid range protection, AX URL representations, transient paste verification and expected-PID mismatch")
+        } else {
+            print("SKIP expected-PID mismatch: Accessibility permission or a frontmost application is unavailable")
+            print("PASS native UTF-16 insertion, selected replacement, empty/multiline/emoji, invalid range protection, AX URL representations and transient paste verification")
+        }
     }
 }

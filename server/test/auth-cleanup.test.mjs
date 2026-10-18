@@ -65,6 +65,9 @@ try {
     password_reset_codes: 0
   })
   assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM refresh_tokens').get().count, 2)
+  for (const index of ['idx_refresh_expires', 'idx_auth_code_expires', 'idx_email_code_expires', 'idx_password_reset_expires']) {
+    assert(getDb().prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(index), `missing ${index}`)
+  }
   console.log('OK auth cleanup removes only records beyond the grace period and is idempotent')
 } finally {
   closeDb()

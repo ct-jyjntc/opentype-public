@@ -79,24 +79,52 @@ export function decideContext(bundleId: string, webDomain: string, webUrl: strin
 
 /**
  * 服务端下发的域名黑名单缓存。
- * 缓存周期按天，避免每次采集都请求；命中则与本地黑名单同样脱敏。
+ * 缓存周期为一小时，避免每次采集都请求；命中则与本地黑名单同样脱敏。
  */
 export class RemoteBlacklist {
   private domains: string[] = []
   private fetchedAt = 0
-  private static readonly TTL_MS = 24 * 3600 * 1000
+  private static readonly TTL_MS = 3600 * 1000
 
-  constructor(private readonly fetcher: () => Promise<string[]>) {}
+  constructor(
+    private readonly fetcher: () => Promise<string[]>,
+    private readonly storage: {
+      load?: () => Promise<unknown>
+      save?: (value: { domains: string[]; fetchedAt: number }) => Promise<void>
+    } = {},
+  ) {}
+
+  private apply(values: unknown, fetchedAt: number): boolean {
+    if (!Array.isArray(values)) return false
+    this.domains = [...new Set(values.map(value => typeof value === 'string' ? value : '')
+      .map(value => value.trim().toLowerCase().replace(/^\./, '').replace(/\.$/, ''))
+      .filter(value => value.length > 0 && value.length <= 253
+        && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value)))]
+      .slice(0, 5000)
+    this.fetchedAt = Number.isSafeInteger(fetchedAt) && fetchedAt > 0 ? fetchedAt : 0
+    return true
+  }
+
+  async initialize(): Promise<void> {
+    try {
+      const cached = await this.storage.load?.()
+      if (cached && typeof cached === 'object' && !Array.isArray(cached)) {
+        const value = cached as Record<string, unknown>
+        this.apply(value.domains, Number(value.fetchedAt))
+      } else {
+        this.apply(cached, 0)
+      }
+    } catch { /* Missing or malformed cache starts empty and refreshes below. */ }
+  }
 
   async refresh(force = false): Promise<void> {
     if (!force && Date.now() - this.fetchedAt < RemoteBlacklist.TTL_MS) return
     try {
       const values = await this.fetcher()
-      this.domains = [...new Set(values.map(value => value.trim().toLowerCase().replace(/^\./, '').replace(/\.$/, ''))
-        .filter(value => value.length > 0 && value.length <= 253
-          && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value)))]
-        .slice(0, 5000)
-      this.fetchedAt = Date.now()
+      this.apply(values, Date.now())
+      try {
+        await this.storage.save?.({ domains: [...this.domains], fetchedAt: this.fetchedAt })
+      } catch { /* Keep the in-memory list if the cache is temporarily unwritable. */ }
     } catch {
       // 拉取失败沿用旧列表：宁可少脱敏也不能因为网络问题放行
     }

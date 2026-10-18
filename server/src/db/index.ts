@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   user_agent  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens (user_id, revoked_at);
+CREATE INDEX IF NOT EXISTS idx_refresh_expires ON refresh_tokens (expires_at);
 
 -- 一次性授权码（PKCE 兑换用）
 CREATE TABLE IF NOT EXISTS auth_codes (
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS auth_codes (
   expires_at    INTEGER NOT NULL,
   consumed_at   INTEGER
 );
+CREATE INDEX IF NOT EXISTS idx_auth_code_expires ON auth_codes (expires_at);
 
 -- 邮件验证码（邮箱登录用）
 CREATE TABLE IF NOT EXISTS email_codes (
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS email_codes (
   consumed_at INTEGER,
   PRIMARY KEY (email, code)
 );
+CREATE INDEX IF NOT EXISTS idx_email_code_expires ON email_codes (expires_at);
 
 -- 密码重置验证码。结构与 email_codes 一致，但校验成功不自动建号——
 -- 重置场景的用户必须已存在，所以两张表分开，避免误用登录码流程。
@@ -78,6 +81,7 @@ CREATE TABLE IF NOT EXISTS password_reset_codes (
   consumed_at INTEGER,
   PRIMARY KEY (email, code)
 );
+CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_codes (expires_at);
 
 -- 用户词典。term 唯一约束按用户隔离；auto=1 表示听写中自动学到的词。
 CREATE TABLE IF NOT EXISTS dictionary_words (

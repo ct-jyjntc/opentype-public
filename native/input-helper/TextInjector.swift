@@ -352,7 +352,7 @@ final class TextInjector: @unchecked Sendable {
                 completion()
             } else {
                 let currentPID = frontmostPIDProvider()
-                if samePasteTarget(targetPID, currentPID), strictTarget.map { matches($0) } ?? true {
+                if samePasteTarget(targetPID, currentPID), strictTarget.map({ matches($0) }) ?? true {
                     processClipboardInjection(
                         ClipboardInjectionRequest(text: text, preserveClipboard: preserveClipboard, targetPID: targetPID, strictTarget: strictTarget, report: report),
                         completion: completion

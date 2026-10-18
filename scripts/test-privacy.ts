@@ -97,5 +97,32 @@ console.log('\n=== 服务端域名黑名单 ===')
   check('远端列表规范化、去重并过滤非法值', bl.entries(), ['bank.example.com'])
 }
 
+{
+  let calls = 0, saved: unknown
+  const bl = new RemoteBlacklist(async () => {
+    calls++
+    return ['fresh.example.com']
+  }, {
+    load: async () => ({ domains: ['cached.example.com'], fetchedAt: Date.now() }),
+    save: async value => { saved = value },
+  })
+  await bl.initialize()
+  check('远端列表冷启动从磁盘缓存恢复', bl.matches('cached.example.com'), true)
+  await bl.refresh()
+  check('缓存 TTL 内不重复请求', calls, 0)
+
+  const refreshed = new RemoteBlacklist(async () => {
+    calls++
+    return ['fresh.example.com']
+  }, {
+    load: async () => ({ domains: ['cached.example.com'], fetchedAt: 1 }),
+    save: async value => { saved = value },
+  })
+  await refreshed.initialize()
+  await refreshed.refresh()
+  check('过期缓存会被刷新', refreshed.matches('fresh.example.com'), true)
+  check('刷新结果写回缓存', (saved as { domains?: string[] })?.domains, ['fresh.example.com'])
+}
+
 console.log(`\n${passed} 通过, ${failed} 失败`)
 process.exit(failed > 0 ? 1 : 0)
